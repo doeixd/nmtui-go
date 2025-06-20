@@ -13,7 +13,7 @@ A Terminal User Interface (TUI) for managing NetworkManager Wi-Fi connections on
 
 ## Overview
 
-`nmtui-go` (this project's name, can be changed) aims to offer a modern and convenient alternative or supplement to `nmcli` for common Wi-Fi tasks, especially on headless systems or for users who prefer terminal-based tools. It leverages the power of `nmcli` in the background for network operations while providing an interactive and visually organized frontend.
+`nmtui-go` aims to offer a modern and convenient alternative or supplement to `nmcli` for common Wi-Fi tasks, especially on headless systems or for users who prefer terminal-based tools. It leverages the power of `nmcli` in the background for network operations while providing an interactive and visually organized frontend.
 
 ## Why Use `nmtui-go`?
 
