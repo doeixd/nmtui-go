@@ -7,7 +7,7 @@ before:
 builds:
   - id: nmtui-go-linux
     binary: nmtui-go
-    main: ./cmd/nmtui-go # Assuming your main.go is in cmd/nmtui-go/
+    main: ./cmd/main.go 
     env:
       - CGO_ENABLED=0
     goos:
@@ -15,22 +15,20 @@ builds:
     goarch:
       - amd64
       - arm64
-    # 'ldflags' should be at the same indentation level as 'goos', 'goarch', 'env'
     ldflags:
       - -s -w
       - -X main.Version={{.Version}}
-      - -X main.Commit={{.Commit}} # Consider using {{.ShortCommit}} for shorter hash
+      - -X main.Commit={{.Commit}} 
       - -X main.BuildDate={{.Date}}
-      - -X main.AppName={{.ProjectName}} # Using {{.ProjectName}} is good
-    # 'tags' should be at the same indentation level as 'ldflags'
+      - -X main.AppName={{.ProjectName}} 
     tags:
       - netgo
       - osusergo
       - static_build
 
-archives: # 'archives' should be at the top level, same as 'builds'
-  - id: nmtui-go-linux # This ID is for the archive config, can be different from build ID
-    builds: # List of build IDs to include in this archive
+archives: 
+  - id: nmtui-go-linux 
+    builds: 
       - nmtui-go-linux
     name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
     format: tar.gz
@@ -42,7 +40,7 @@ checksum:
   name_template: 'checksums.txt'
 
 snapshot:
-  name_template: "{{ .Tag }}-next-{{ .ShortCommit }}" # Added {{.ShortCommit}} for more uniqueness in snapshots
+  name_template: "{{ .Tag }}-next-{{ .ShortCommit }}" 
 
 changelog:
   sort: asc
@@ -53,16 +51,12 @@ changelog:
       - '^chore:'
       - '^refactor:'
       - '^ci:'
-      - 'Merge pull request' # Often good to exclude merge commits from changelog
+      - 'Merge pull request' 
       - 'Merge branch'
 
 release:
-  # 'github' section is optional if you're releasing to github.com
-  # and the repository is the one the action is running in.
-  # GoReleaser usually infers owner/name correctly.
-  # If you need to specify it (e.g., cross-repo or specific forks):
-  # github:
-  #   owner: doeixd
-  #   name: nmtui-go
+   github:
+     owner: doeixd
+     name: nmtui-go
   prerelease: auto # Marks pre-releases based on tag format (e.g., v0.1.0-beta)
-  name_template: "{{.ProjectName}} {{.Tag}}" # Changed to use {{.Tag}} for standard versioning like v0.1.0
+  name_template: "{{.ProjectName}} {{.Tag}}" 
