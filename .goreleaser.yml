@@ -1,0 +1,56 @@
+project_name: nmtui-go
+
+
+before:
+  hooks:
+    - go mod tidy
+builds:
+  - id: nmtui-go-linux
+    binary: nmtui-go
+    main: ./cmd/nmtui-go
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - linux
+    goarch:
+      - amd64
+      - arm64
+      ldflags:
+        - -s -w
+        - -X main.Version={{.Version}}
+        - -X main.Commit={{.Commit}}
+        - -X main.BuildDate={{.Date}}
+        - -X main.AppName=nmtui-go
+      tags:
+        - netgo
+        - osusergo
+        - static_build
+archives: 
+  - id: nmtui-go-linux
+    builds:
+      - nmtui-go-linux
+    name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+    format: tar.gz
+    files:
+      - LICENSE
+      - README.md
+checksum:
+  name_template: 'checksums.txt'
+snapshot:
+  name_template: "{{ .Tag }}-next"
+changelog:
+  sort: asc
+  filters:
+    exclude:
+      - '^docs:'
+      - '^test:'
+      - '^chore:'
+      - '^refactor:'
+      - '^ci:'
+release:
+  github:
+    owner: doeixd
+    name: nmtui-go
+  prerelease: auto
+  name_template: "{{.ProjectName}}-v{{.Version}}"
+
