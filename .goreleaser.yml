@@ -25,7 +25,7 @@ builds:
         - netgo
         - osusergo
         - static_build
-archives: 
+  archives: 
   - id: nmtui-go-linux
     builds:
       - nmtui-go-linux
