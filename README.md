@@ -1,14 +1,15 @@
 
 # Go Network Manager TUI (nmtui-go)
 
-[![GoReleaser](https://github.com/your-username/nmtui/actions/workflows/release.yml/badge.svg)](https://github.com/your-username/nmtui/actions/workflows/release.yml)
-[![GitHub release (latest SemVer)](https://img.shields.io/github/v/release/your-username/nmtui?sort=semver&label=latest%20release)](https://github.com/your-username/nmtui/releases/latest)
+[![GoReleaser](https://github.com/doeixd/nmtui-go/actions/workflows/release.yml/badge.svg)](https://github.com/doeixd/nmtui-go/actions/workflows/release.yml)
+[![GitHub release (latest SemVer)](https://img.shields.io/github/v/release/doeixd/nmtui-go?sort=semver&label=latest%20release)](https://github.com/doeixd/nmtui-go/releases/latest)
 <!-- Add other badges if you like: license, issues, etc. -->
 
 A Terminal User Interface (TUI) for managing NetworkManager Wi-Fi connections on Linux systems, built with Go and the [Bubble Tea](https://github.com/charmbracelet/bubbletea) framework. This tool provides a keyboard-driven, user-friendly way to scan, connect to, and manage Wi-Fi networks directly from your terminal.
 
 <!-- Optional: Add a screenshot or GIF of the TUI in action -->
-<!-- ![nmtui-go Screenshot](screenshot.png) -->
+![nmtui-go Screenshot](screenshot.png)
+**nmtui-go Screenshot**
 
 ## Overview
 
@@ -51,32 +52,32 @@ A Terminal User Interface (TUI) for managing NetworkManager Wi-Fi connections on
 
 ## Installation
 
-You can download the latest pre-compiled binary for your Linux distribution and architecture from the [GitHub Releases page](https://github.com/your-username/nmtui/releases/latest).
+You can download the latest pre-compiled binary for your Linux distribution and architecture from the [GitHub Releases page](https://github.com/doeixd/nmtui-go/releases/latest).
 
-1.  Go to the [Releases page](https://github.com/your-username/nmtui/releases/latest).
-2.  Download the appropriate `.tar.gz` archive for your system (e.g., `nmtui_vx.y.z_linux_amd64.tar.gz`).
+1.  Go to the [Releases page](https://github.com/doeixd/nmtui-go/releases/latest).
+2.  Download the appropriate `.tar.gz` archive for your system (e.g., `nmtui-go_vx.y.z_linux_amd64.tar.gz`).
 3.  Extract the archive:
     ```bash
-    tar -xvf nmtui_vx.y.z_linux_amd64.tar.gz
+    tar -xvf nmtui-go_vx.y.z_linux_amd64.tar.gz
     ```
-4.  This will extract the `nmtui` binary (and `README.md`, `LICENSE`).
-5.  Move the `nmtui` binary to a directory in your system's `PATH`, for example:
+4.  This will extract the `nmtui-go` binary (and `README.md`, `LICENSE`).
+5.  Move the `nmtui-go` binary to a directory in your system's `PATH`, for example:
     ```bash
-    sudo mv nmtui /usr/local/bin/
+    sudo mv nmtui-go /usr/local/bin/
     ```
 6.  Ensure the binary is executable:
     ```bash
-    sudo chmod +x /usr/local/bin/nmtui
+    sudo chmod +x /usr/local/bin/nmtui-go
     ```
 
-Now you can run the application by typing `nmtui` in your terminal.
+Now you can run the application by typing `nmtui-go` in your terminal.
 
 ## Usage
 
 Simply run the command:
 
 ```bash
-nmtui
+nmtui-go
 ```
 
 The application will start, scan for Wi-Fi networks, and display them in a list.
@@ -147,7 +148,7 @@ Releases are automated using [GoReleaser](https://goreleaser.com/) and [GitHub A
 *   **Debug Log:**
     If you encounter issues, you can run the application with debug logging enabled:
     ```bash
-    DEBUG_TEA=1 nmtui
+    DEBUG_TEA=1 nmtui-go
     ```
     This will create a `nmtui-debug.log` file in the directory where you run the command. This log contains detailed information about `nmcli` commands being executed and any errors, which can be very helpful for diagnosing problems. Please include relevant parts of this log if you are reporting an issue.
 *   **Linux Only:** This tool is designed for Linux systems running NetworkManager. It will not work on macOS or Windows as it depends on `nmcli`.
