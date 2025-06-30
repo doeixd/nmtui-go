@@ -1,9 +1,12 @@
-name : Release
+name: Release
 
 on:
-  push:
-    tags:
-      - 'v*'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'The git tag to release (e.g., v1.2.3)'
+        required: true
+        type: string
 
 permissions:
   contents: write
@@ -12,17 +15,23 @@ jobs:
   release:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+
+      - name: Checkout code for tag
+        uses: actions/checkout@v4
         with:
+          ref: ${{ github.event.inputs.tag }}
           fetch-depth: 0
+
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
           go-version: 'stable'
           cache: true
+
       - name: Run GoReleaser
         uses: goreleaser/goreleaser-action@v5
         with:
+          # The version will be correctly inferred from the git tag
           args: release --clean
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
