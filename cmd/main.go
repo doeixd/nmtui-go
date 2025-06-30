@@ -208,6 +208,8 @@ func initialModel() model {
 	l.Title = "Scanning for Wi-Fi Networks..."; l.Styles.Title = listTitleStyle
 	l.SetShowStatusBar(true); l.SetStatusBarItemName("network", "networks"); l.SetShowHelp(false); l.DisableQuitKeybindings()
 	l.Styles.NoItems = listNoItemsStyle.Copy().SetString("No Wi-Fi. Try (r)efresh, (t)oggle Wi-Fi, (u)nnamed.")
+	l.Styles.FilterPrompt = lipgloss.NewStyle().Foreground(ansPrimaryColor)
+	l.Styles.FilterCursor = lipgloss.NewStyle().Foreground(ansPrimaryColor)
 	l.AdditionalShortHelpKeys = func() []key.Binding { return []key.Binding{defaultKeyBindings.Filter, defaultKeyBindings.Refresh, defaultKeyBindings.ToggleHidden} }
 	l.AdditionalFullHelpKeys = l.AdditionalShortHelpKeys
 	ti := textinput.New(); ti.Placeholder = "Network Password"; ti.EchoMode = textinput.EchoPassword; ti.CharLimit = 63
