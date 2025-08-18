@@ -105,7 +105,9 @@ func parseNmcliMultilineOutput(output string) ([]map[string]string, error) {
 			if i == 0 && !strings.Contains(trimmedLine, ":") { continue }
 			return nil, fmt.Errorf("malformed line in multiline output: \"%s\"", trimmedLine)
 		}
-		key := strings.TrimSpace(parts[0]); value := strings.TrimSpace(parts[1])
+		key := strings.TrimSpace(parts[0])
+		// Only trim leading whitespace from the value to preserve trailing spaces in SSIDs.
+		value := strings.TrimLeft(parts[1], " \t")
 		if key == "" { return nil, fmt.Errorf("empty key for value: \"%s\"", value) }
 		if currentRecord == nil { currentRecord = make(map[string]string); firstKeyOfRecord = key
 		} else if key == firstKeyOfRecord && len(currentRecord) > 0 {
@@ -322,7 +324,8 @@ func DeviceStatus() ([]DeviceOverallStatus, error) {
 	var statuses []DeviceOverallStatus
 	scanner := bufio.NewScanner(strings.NewReader(output))
 	for scanner.Scan() {
-		line := scanner.Text(); parts := strings.Split(line, ":")
+		line := scanner.Text()
+		parts := strings.SplitN(line, ":", 4)
 		if len(parts) < 3 { continue }
 		status := DeviceOverallStatus{
 			Device:strings.TrimSpace(parts[0]), Type:strings.TrimSpace(parts[1]), State:parseDeviceState(strings.TrimSpace(parts[2])),
@@ -450,8 +453,9 @@ func AddWifiConnectionPSK(profileName, ifname, ssid, password string) (string, e
 		// Attempt to delete the existing profile
 		_, delErr := ConnectionDelete(existingProfileIdentifier)
 		if delErr != nil {
-			log.Printf("Failed to delete existing profile '%s': %v. Proceeding to add new.", existingProfileIdentifier, delErr)
-			// Non-fatal, nmcli add might still work or overwrite, but good to log.
+			log.Printf("Failed to delete existing profile '%s': %v. Aborting profile modification.", existingProfileIdentifier, delErr)
+			// Return an error instead of just logging and continuing.
+			return "", fmt.Errorf("failed to delete existing profile '%s' before re-adding: %w", existingProfileIdentifier, delErr)
 		}
 
 		// Proceed to add as a new profile
