@@ -441,33 +441,111 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		switch m.state {
 		case viewNetworksList:
+			// If the list is filtering, it receives all key events.
 			if m.wifiList.FilterState() == list.Filtering {
-				m.wifiList, cmd = m.wifiList.Update(msg); cmds = append(cmds, cmd)
-				if m.wifiList.FilterState() != list.Filtering { m.connectionStatusMsg = "" } // Clear "Filtering..." if filter exited
-			} else {
-				if m.isLoading { break }
-				keyProcessed := false
-				switch {
-				case key.Matches(msg, m.keys.ToggleHidden): m.showHiddenNetworks = !m.showHiddenNetworks; m.processAndSetWifiList(m.allScannedAps); if m.showHiddenNetworks {m.connectionStatusMsg = toggleHiddenStatusMsgStyle.Render("Showing unnamed.")} else {m.connectionStatusMsg = toggleHiddenStatusMsgStyle.Render("Hiding unnamed.")}; keyProcessed = true
-				case key.Matches(msg, m.keys.Filter): m.wifiList.FilterInput.Focus(); m.connectionStatusMsg = "Filtering..."; cmds = append(cmds, textinput.Blink); keyProcessed = true
-				case key.Matches(msg, m.keys.Refresh): m.isLoading = true; m.connectionStatusMsg = ""; m.allScannedAps = nil; m.processAndSetWifiList([]wifiAP{}); m.wifiList.Title = "Refreshing..."; cmds = append(cmds, fetchKnownNetworksCmd(), fetchWifiNetworksCmd(true), m.spinner.Tick); keyProcessed = true
-				case key.Matches(msg, m.keys.ToggleWifi): m.isLoading = true; act := "OFF"; if !m.wifiEnabled {act="ON"}; m.connectionStatusMsg = fmt.Sprintf("Toggling Wi-Fi %s...", act); cmds = append(cmds, toggleWifiCmd(!m.wifiEnabled), m.spinner.Tick); keyProcessed = true
-				case key.Matches(msg, m.keys.Disconnect): if m.activeWifiConnection != nil { sAP := gonetworkmanager.GetSSIDFromProfile(*m.activeWifiConnection); td := make(gonetworkmanager.WifiAccessPoint); td[gonetworkmanager.NmcliFieldWifiSSID] = sAP; m.selectedAP = wifiAP{WifiAccessPoint: td, IsActive: true, IsKnown: true, Interface: m.activeWifiDevice}; m.state = viewConfirmDisconnect; m.connectionStatusMsg = "" } else { m.connectionStatusMsg = toggleHiddenStatusMsgStyle.Render("Not connected.") }; keyProcessed = true
-				case key.Matches(msg, m.keys.Forget): if item, ok := m.wifiList.SelectedItem().(wifiAP); ok && item.IsKnown { m.selectedAP = item; m.state = viewConfirmForget; m.connectionStatusMsg = "" } else if ok { m.connectionStatusMsg = toggleHiddenStatusMsgStyle.Render(fmt.Sprintf("%s not known.", item.StyledTitle())) } else { m.connectionStatusMsg = toggleHiddenStatusMsgStyle.Render("No item selected.") }; keyProcessed = true
-				case key.Matches(msg, m.keys.Info): if m.activeWifiConnection != nil && m.activeWifiDevice != "" { m.state = viewActiveConnectionInfo; m.isLoading = true; m.activeConnInfoViewport.SetContent("Loading..."); m.activeConnInfoViewport.GotoTop(); cmds = append(cmds, fetchActiveConnInfoCmd(m.activeWifiDevice), m.spinner.Tick); m.connectionStatusMsg = "" } else { m.connectionStatusMsg = toggleHiddenStatusMsgStyle.Render("No active connection.") }; keyProcessed = true
-				case key.Matches(msg, m.keys.Connect):
-					if item, ok := m.wifiList.SelectedItem().(wifiAP); ok {
-						m.selectedAP = item; ssid := item.getSSIDFromScannedAP()
-						if item.IsActive { m.state = viewConfirmDisconnect; m.connectionStatusMsg = ""; keyProcessed = true; break }
-						sec := ""; if item.WifiAccessPoint != nil { sec = strings.ToLower(item.WifiAccessPoint[gonetworkmanager.NmcliFieldWifiSecurity]) }
-						isOpen := sec == "" || sec == "open" || sec == "--"
-						log.Printf("Connect: SSID '%s', Known: %t, Open: %t", ssid, item.IsKnown, isOpen)
-						if isOpen || item.IsKnown { m.isLoading = true; m.state = viewConnecting; m.connectionStatusMsg = fmt.Sprintf("Connecting to %s...", item.StyledTitle()); cmds = append(cmds, connectToWifiCmd(ssid, "", item.IsKnown), m.spinner.Tick)
-						} else { m.state = viewPasswordInput; m.passwordInput.SetValue(""); m.passwordInput.Focus(); m.connectionStatusMsg = ""; cmds = append(cmds, textinput.Blink) }
-					}
-					keyProcessed = true
+				m.wifiList, cmd = m.wifiList.Update(msg)
+				cmds = append(cmds, cmd)
+
+				// If the user just exited the filter, clear the "Filtering..." status message.
+				if m.wifiList.FilterState() != list.Filtering {
+					m.connectionStatusMsg = ""
 				}
-				if !keyProcessed { m.wifiList, cmd = m.wifiList.Update(msg); cmds = append(cmds, cmd) }
+				// Return immediately to prevent the keypress from being processed again.
+				// This is the fix for the Enter key bug.
+				return m, tea.Batch(cmds...)
+			}
+
+			// If we're not filtering, handle keypresses as normal.
+			if m.isLoading {
+				break
+			}
+
+			switch {
+			case key.Matches(msg, m.keys.ToggleHidden):
+				m.showHiddenNetworks = !m.showHiddenNetworks
+				m.processAndSetWifiList(m.allScannedAps)
+				if m.showHiddenNetworks {m.connectionStatusMsg = toggleHiddenStatusMsgStyle.Render("Showing unnamed.")} else {m.connectionStatusMsg = toggleHiddenStatusMsgStyle.Render("Hiding unnamed.")}
+			case key.Matches(msg, m.keys.Filter):
+				m.wifiList.FilterInput.Focus()
+				m.connectionStatusMsg = "Filtering..."
+				cmds = append(cmds, textinput.Blink)
+			case key.Matches(msg, m.keys.Refresh):
+				m.isLoading = true
+				m.connectionStatusMsg = ""
+				m.allScannedAps = nil
+				m.processAndSetWifiList([]wifiAP{})
+				m.wifiList.Title = "Refreshing..."
+				cmds = append(cmds, fetchKnownNetworksCmd(), fetchWifiNetworksCmd(true), m.spinner.Tick)
+			case key.Matches(msg, m.keys.ToggleWifi):
+				m.isLoading = true
+				act := "OFF"
+				if !m.wifiEnabled {act="ON"}
+				m.connectionStatusMsg = fmt.Sprintf("Toggling Wi-Fi %s...", act)
+				cmds = append(cmds, toggleWifiCmd(!m.wifiEnabled), m.spinner.Tick)
+			case key.Matches(msg, m.keys.Disconnect):
+				if m.activeWifiConnection != nil {
+					sAP := gonetworkmanager.GetSSIDFromProfile(*m.activeWifiConnection)
+					td := make(gonetworkmanager.WifiAccessPoint)
+					td[gonetworkmanager.NmcliFieldWifiSSID] = sAP
+					m.selectedAP = wifiAP{WifiAccessPoint: td, IsActive: true, IsKnown: true, Interface: m.activeWifiDevice}
+					m.state = viewConfirmDisconnect
+					m.connectionStatusMsg = ""
+				} else {
+					m.connectionStatusMsg = toggleHiddenStatusMsgStyle.Render("Not connected.")
+				}
+			case key.Matches(msg, m.keys.Forget):
+				if item, ok := m.wifiList.SelectedItem().(wifiAP); ok && item.IsKnown {
+					m.selectedAP = item
+					m.state = viewConfirmForget
+					m.connectionStatusMsg = ""
+				} else if ok {
+					m.connectionStatusMsg = toggleHiddenStatusMsgStyle.Render(fmt.Sprintf("%s not known.", item.StyledTitle()))
+				} else {
+					m.connectionStatusMsg = toggleHiddenStatusMsgStyle.Render("No item selected.")
+				}
+			case key.Matches(msg, m.keys.Info):
+				if m.activeWifiConnection != nil && m.activeWifiDevice != "" {
+					m.state = viewActiveConnectionInfo
+					m.isLoading = true
+					m.activeConnInfoViewport.SetContent("Loading...")
+					m.activeConnInfoViewport.GotoTop()
+					cmds = append(cmds, fetchActiveConnInfoCmd(m.activeWifiDevice), m.spinner.Tick)
+					m.connectionStatusMsg = ""
+				} else {
+					m.connectionStatusMsg = toggleHiddenStatusMsgStyle.Render("No active connection.")
+				}
+			case key.Matches(msg, m.keys.Connect):
+				if item, ok := m.wifiList.SelectedItem().(wifiAP); ok {
+					m.selectedAP = item
+					ssid := item.getSSIDFromScannedAP()
+					if item.IsActive {
+						m.state = viewConfirmDisconnect
+						m.connectionStatusMsg = ""
+						break
+					}
+					sec := ""
+					if item.WifiAccessPoint != nil {
+						sec = strings.ToLower(item.WifiAccessPoint[gonetworkmanager.NmcliFieldWifiSecurity])
+					}
+					isOpen := sec == "" || sec == "open" || sec == "--"
+					log.Printf("Connect: SSID '%s', Known: %t, Open: %t", ssid, item.IsKnown, isOpen)
+					if isOpen || item.IsKnown {
+						m.isLoading = true
+						m.state = viewConnecting
+						m.connectionStatusMsg = fmt.Sprintf("Connecting to %s...", item.StyledTitle())
+						cmds = append(cmds, connectToWifiCmd(ssid, "", item.IsKnown), m.spinner.Tick)
+					} else {
+						m.state = viewPasswordInput
+						m.passwordInput.SetValue("")
+						m.passwordInput.Focus()
+						m.connectionStatusMsg = ""
+						cmds = append(cmds, textinput.Blink)
+					}
+				}
+			default:
+				// Pass all other keypresses to the list for navigation.
+				m.wifiList, cmd = m.wifiList.Update(msg)
+				cmds = append(cmds, cmd)
 			}
 		case viewPasswordInput: /* Same logic as before */ 
 			passthrough := true
