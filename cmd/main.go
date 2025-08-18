@@ -207,6 +207,7 @@ var defaultKeyBindings = keyMap{
 
 type model struct {
 	state                  viewState
+	previousState          viewState
 	wifiList               list.Model
 	knownWifiList          list.Model
 	passwordInput          textinput.Model
@@ -508,7 +509,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.success { m.connectionStatusMsg = successStyle.Render(fmt.Sprintf("Disconnected from %s.", msg.ssid)); m.activeWifiConnection = nil; m.activeWifiDevice = ""
 		} else { m.connectionStatusMsg = errorStyle.Render(fmt.Sprintf("Error disconnecting from %s: %v", msg.ssid, msg.err)) }
 		m.state = viewNetworksList; cmds = append(cmds, fetchKnownNetworksCmd(), fetchWifiNetworksCmd(true))
-	case forgetNetworkResultMsg: /* Same */ 
+	case forgetNetworkResultMsg:
 		m.isLoading = false
 		if msg.success {
 			m.connectionStatusMsg = successStyle.Render(fmt.Sprintf("Network profile for %s forgotten.", msg.ssid))
@@ -516,8 +517,16 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		} else {
 			m.connectionStatusMsg = errorStyle.Render(fmt.Sprintf("Error forgetting profile for %s: %v", msg.ssid, msg.err))
 		}
-		m.state = viewNetworksList
-		cmds = append(cmds, fetchKnownNetworksCmd(), fetchWifiNetworksCmd(true))
+
+		// Return to the previous state instead of always going to the main list
+		m.state = m.previousState
+
+		// If we came from the profiles list, refresh it. Otherwise, refresh the main list.
+		if m.state == viewKnownNetworksList {
+			cmds = append(cmds, fetchKnownWifiApsCmd())
+		} else {
+			cmds = append(cmds, fetchKnownNetworksCmd(), fetchWifiNetworksCmd(true))
+		}
 
 	case knownWifiApsListMsg:
 		m.isLoading = false
@@ -606,6 +615,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			case key.Matches(msg, m.keys.Forget):
 				if item, ok := m.wifiList.SelectedItem().(wifiAP); ok && item.IsKnown {
 					m.selectedAP = item
+					m.previousState = m.state
 					m.state = viewConfirmForget
 					m.connectionStatusMsg = ""
 				} else if ok {
@@ -728,6 +738,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			case key.Matches(msg, m.keys.Forget):
 				if item, ok := m.knownWifiList.SelectedItem().(wifiAP); ok {
 					m.selectedAP = item
+					m.previousState = m.state
 					m.state = viewConfirmForget
 					m.connectionStatusMsg = ""
 				}

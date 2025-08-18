@@ -39,6 +39,7 @@ A Terminal User Interface (TUI) for managing NetworkManager Wi-Fi connections on
     *   Sorts networks by active, known, and then signal strength.
 *   **Active Connection Info:** Display detailed information about the current active Wi-Fi connection (IP address, MAC, gateway, DNS, etc.).
 *   **Manage Wi-Fi Radio:** Toggle the Wi-Fi radio on/off.
+*   **Manage Known Profiles:** View a list of all known Wi-Fi profiles and "forget" them, even if they are not currently in scan range.
 *   **Disconnect:** Disconnect from the currently active Wi-Fi network.
 *   **Filtering:** Filter the network list by SSID.
 *   **Responsive Layout:** UI elements adjust to terminal window size.
@@ -102,6 +103,8 @@ The most common keybindings are displayed in the help bar at the bottom. Press `
 *   **`t`:** Toggle the Wi-Fi radio on or off.
 *   **`d`:** Disconnect from the current active Wi-Fi network (will prompt for confirmation).
 *   **`i`:** Show detailed information about the currently active Wi-Fi connection.
+*   **`p`:** View and manage all known Wi-Fi connection profiles.
+*   **`ctrl+f`:** In the scan list or profiles list, forget the selected network profile.
 *   **`?`:** Toggle between short and full help display at the bottom.
 *   **`q` / `Ctrl+C`:** Quit the application.
 
