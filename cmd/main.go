@@ -46,7 +46,7 @@ var (
 
 	adaptiveTitleForegroundColor = lipgloss.AdaptiveColor{Light: "235", Dark: "250"}
 	titleStyle                   = lipgloss.NewStyle().Bold(true).Foreground(ansPrimaryColor).Padding(0, 1).MarginBottom(1)
-	listTitleStyle               = lipgloss.NewStyle().Background(ansSecondaryColor).Foreground(adaptiveTitleForegroundColor).Padding(0, 1).Bold(true)
+	listTitleStyle               = lipgloss.NewStyle().Foreground(ansSecondaryColor).Padding(0, 1).Bold(true)
 	listItemStyle                = lipgloss.NewStyle().PaddingLeft(2).Foreground(ansTextColor)
 	listSelectedItemStyle        = lipgloss.NewStyle().PaddingLeft(1).Foreground(ansPrimaryColor).Bold(true)
 	listDescStyle                = lipgloss.NewStyle().PaddingLeft(2).Foreground(ansFaintTextColor)
