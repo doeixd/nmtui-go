@@ -1,4 +1,3 @@
-
 #!/bin/bash
 
 set -e # Exit immediately if a command exits with a non-zero status.
@@ -16,7 +15,7 @@ get_latest_tag() {
 increment_version() {
   local version=$1
   local part=$2 # major, minor, patch
-
+  
   # Remove 'v' prefix for manipulation
   version_no_v="${version#v}"
   
