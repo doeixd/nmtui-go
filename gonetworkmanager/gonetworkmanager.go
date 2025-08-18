@@ -105,7 +105,10 @@ func parseNmcliMultilineOutput(output string) ([]map[string]string, error) {
 			if i == 0 && !strings.Contains(trimmedLine, ":") { continue }
 			return nil, fmt.Errorf("malformed line in multiline output: \"%s\"", trimmedLine)
 		}
-		key := strings.TrimSpace(parts[0]); value := strings.TrimSpace(parts[1])
+		key := strings.TrimSpace(parts[0])
+		// Only trim the conventional single leading space from nmcli's output value.
+		// This preserves both leading and trailing spaces that are part of the actual value.
+		value := strings.TrimPrefix(parts[1], " ")
 		if key == "" { return nil, fmt.Errorf("empty key for value: \"%s\"", value) }
 		if currentRecord == nil { currentRecord = make(map[string]string); firstKeyOfRecord = key
 		} else if key == firstKeyOfRecord && len(currentRecord) > 0 {
