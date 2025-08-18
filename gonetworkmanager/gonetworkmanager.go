@@ -106,9 +106,8 @@ func parseNmcliMultilineOutput(output string) ([]map[string]string, error) {
 			return nil, fmt.Errorf("malformed line in multiline output: \"%s\"", trimmedLine)
 		}
 		key := strings.TrimSpace(parts[0])
-		// Only trim the conventional single leading space from nmcli's output value.
-		// This preserves both leading and trailing spaces that are part of the actual value.
-		value := strings.TrimPrefix(parts[1], " ")
+		// Only trim leading whitespace from the value to preserve trailing spaces in SSIDs.
+		value := strings.TrimLeft(parts[1], " \t")
 		if key == "" { return nil, fmt.Errorf("empty key for value: \"%s\"", value) }
 		if currentRecord == nil { currentRecord = make(map[string]string); firstKeyOfRecord = key
 		} else if key == firstKeyOfRecord && len(currentRecord) > 0 {
