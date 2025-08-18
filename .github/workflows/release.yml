@@ -1,12 +1,9 @@
 name: Release
 
 on:
-  workflow_dispatch:
-    inputs:
-      tag:
-        description: 'The git tag to release (e.g., v1.2.3)'
-        required: true
-        type: string
+  push:
+    tags:
+      - 'v*' # Triggers on tags like v1.0.0, v1.2.3, etc.
 
 permissions:
   contents: write
@@ -15,11 +12,10 @@ jobs:
   release:
     runs-on: ubuntu-latest
     steps:
-
-      - name: Checkout code for tag
+      - name: Checkout code
         uses: actions/checkout@v4
         with:
-          ref: ${{ github.event.inputs.tag }}
+          # GoReleaser needs the full git history to generate a changelog
           fetch-depth: 0
 
       - name: Set up Go
