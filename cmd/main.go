@@ -127,7 +127,7 @@ func (ap wifiAP) StyledTitle() string {
 		indicator += lipgloss.NewStyle().Foreground(ansSuccessColor).Render(" ")
 	}
 	if ap.IsKnown && !ap.IsActive {
-		indicator += lipgloss.NewStyle().Foreground(ansAccentColor).Render(" •")
+		indicator += lipgloss.NewStyle().Foreground(ansAccentColor).Render(" ★")
 	}
 	return fmt.Sprintf("%s%s", ssid, indicator)
 }
