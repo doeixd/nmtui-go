@@ -580,12 +580,43 @@ func (m *model) getAllWifiItems() []list.Item {
 	log.Printf("GetAllWifiItems: Processing %d scanned APs, %d known profiles, active conn: %v",
 		len(m.allScannedAps), len(m.knownProfiles), m.activeWifiConnection != nil)
 
+	// Deduplicate scanned APs by SSID, keeping the one with the strongest signal
+	deduplicatedAps := make(map[string]wifiAP)
+	for _, ap := range m.allScannedAps {
+		ssid := ap.getSSIDFromScannedAP()
+		if ssid == "" || ssid == "--" {
+			// For hidden networks, each one is unique, so add them all
+			// Use a unique key combining SSID and BSSID if available
+			bssid := ap.WifiAccessPoint[gonetworkmanager.NmcliFieldWifiBSSID]
+			key := ssid + "|" + bssid
+			deduplicatedAps[key] = ap
+		} else {
+			// For named networks, keep the one with the strongest signal
+			if existing, ok := deduplicatedAps[ssid]; ok {
+				existingSignal, _ := strconv.Atoi(existing.WifiAccessPoint[gonetworkmanager.NmcliFieldWifiSignal])
+				newSignal, _ := strconv.Atoi(ap.WifiAccessPoint[gonetworkmanager.NmcliFieldWifiSignal])
+				if newSignal > existingSignal {
+					deduplicatedAps[ssid] = ap
+					log.Printf("GetAllWifiItems: Keeping stronger signal for '%s': %d > %d", ssid, newSignal, existingSignal)
+				}
+			} else {
+				deduplicatedAps[ssid] = ap
+			}
+		}
+	}
+
+	// Convert deduplicated map back to slice
+	var deduplicatedSlice []wifiAP
+	for _, ap := range deduplicatedAps {
+		deduplicatedSlice = append(deduplicatedSlice, ap)
+	}
+
 	// First, collect all known profiles that aren't in the scanned list
 	knownNetworksNotInScan := make(map[string]wifiAP)
 	for ssid, profile := range m.knownProfiles {
-		// Check if this known network is in the scanned list
+		// Check if this known network is in the deduplicated scanned list
 		found := false
-		for _, ap := range m.allScannedAps {
+		for _, ap := range deduplicatedSlice {
 			if ap.getSSIDFromScannedAP() == ssid {
 				found = true
 				break
@@ -615,9 +646,9 @@ func (m *model) getAllWifiItems() []list.Item {
 		}
 	}
 
-	// Filter scanned APs based on hidden network settings
+	// Filter deduplicated APs based on hidden network settings
 	var filteredAps []wifiAP
-	for _, ap := range m.allScannedAps {
+	for _, ap := range deduplicatedSlice {
 		ssid := ap.getSSIDFromScannedAP()
 		isUnnamed := ssid == "" || ssid == "--"
 		if m.showHiddenNetworks || !isUnnamed {
