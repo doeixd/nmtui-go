@@ -4,6 +4,7 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
 	"io"
 	"log"
@@ -26,6 +27,7 @@ import (
 
 const (
 	debugLogFile            = "nmtui-debug.log"
+	cacheFile               = "/tmp/nmtui-cache.json"
 	helpBarMaxWidth         = 80
 	helpBarWidthPercent     = 0.80
 	networkListFixedWidth   = 100
@@ -130,8 +132,13 @@ func (ap wifiAP) Description() string {
 	}
 	descParts := []string{}
 	labelStyle := lipgloss.NewStyle().Foreground(ansFaintTextColor)
-	if signalStr != "" {
-		signalVal, _ := strconv.Atoi(signalStr)
+
+	signalVal, _ := strconv.Atoi(signalStr)
+
+	// If this is a known network with no signal, it's out of range
+	if ap.IsKnown && signalVal == 0 {
+		descParts = append(descParts, labelStyle.Render("Known (Out of Range)"))
+	} else if signalStr != "" {
 		var sStyle lipgloss.Style
 		switch {
 		case signalVal > 70: sStyle = lipgloss.NewStyle().Foreground(ansSuccessColor)
@@ -140,6 +147,7 @@ func (ap wifiAP) Description() string {
 		}
 		descParts = append(descParts, fmt.Sprintf("%s %s", labelStyle.Render("Signal:"), sStyle.Render(signalStr+"%%")))
 	}
+
 	if security == "" || security == "--" { security = "Open" }
 	descParts = append(descParts, fmt.Sprintf("%s %s", labelStyle.Render("Security:"), labelStyle.Render(security)))
 	return strings.Join(descParts, labelStyle.Render(" | "))
@@ -211,6 +219,7 @@ type model struct {
 	wifiList               list.Model
 	knownWifiList          list.Model
 	passwordInput          textinput.Model
+	filterInput            textinput.Model
 	spinner                spinner.Model
 	activeConnInfoViewport viewport.Model
 	selectedAP             wifiAP
@@ -223,6 +232,9 @@ type model struct {
 	allScannedAps          []wifiAP
 	showHiddenNetworks     bool
 	isLoading              bool
+	isScanning             bool
+	isFiltering            bool
+	filterQuery            string
 	width, height          int
 	listDisplayWidth       int
 	keys                   keyMap
@@ -240,6 +252,8 @@ func initialModel() model {
 	l.AdditionalFullHelpKeys = l.AdditionalShortHelpKeys
 	ti := textinput.New(); ti.Placeholder = "Network Password"; ti.EchoMode = textinput.EchoPassword; ti.CharLimit = 63
 	ti.Prompt = passwordPromptStyle.Render("🔑 Password: "); ti.EchoCharacter = '•'; ti.Cursor.Style = lipgloss.NewStyle().Foreground(ansAccentColor)
+	fi := textinput.New(); fi.Placeholder = "Type to filter..."; fi.CharLimit = 100
+	fi.Prompt = "/ "; fi.Cursor.Style = lipgloss.NewStyle().Foreground(ansPrimaryColor)
 	s := spinner.New(); s.Spinner = spinner.Globe; s.Style = connectingStyle
 	vp := viewport.New(0, 0); vp.Style = infoBoxStyle.Copy()
 	h := help.New(); h.ShowAll = false
@@ -258,20 +272,51 @@ func initialModel() model {
 		wifiList:      l,
 		knownWifiList: pl,
 		passwordInput: ti,
+		filterInput:   fi,
 		spinner:       s,
 		activeConnInfoViewport: vp,
 		isLoading:              true,
+		isScanning:             true,
+		isFiltering:            false,
+		filterQuery:            "",
 		keys:                   defaultKeyBindings,
 		help:                   h,
 		knownProfiles:          make(map[string]gonetworkmanager.ConnectionProfile),
 		showHiddenNetworks:     false,
 	}
 	m.keys.currentState = m.state
+
+	// Load cached networks if available
+	if cachedAps := loadCachedNetworks(); cachedAps != nil {
+		m.allScannedAps = cachedAps
+		m.processAndSetWifiList(cachedAps)
+	}
+
 	return m
 }
 
 func (m model) Init() tea.Cmd {
 	return tea.Batch(getWifiStatusInternalCmd(), fetchKnownNetworksCmd(), fetchWifiNetworksCmd(true), m.spinner.Tick)
+}
+
+func loadCachedNetworks() []wifiAP {
+	data, err := os.ReadFile(cacheFile)
+	if err != nil {
+		return nil
+	}
+	var cached []wifiAP
+	if err := json.Unmarshal(data, &cached); err != nil {
+		return nil
+	}
+	return cached
+}
+
+func saveCachedNetworks(aps []wifiAP) {
+	data, err := json.Marshal(aps)
+	if err != nil {
+		return
+	}
+	os.WriteFile(cacheFile, data, 0644)
 }
 
 func fetchWifiNetworksCmd(rescan bool) tea.Cmd { /* Same */ 
@@ -314,21 +359,59 @@ func fetchKnownNetworksCmd() tea.Cmd { /* Same */
 	return func() tea.Msg {
 		log.Printf("Cmd: Fetching known networks...")
 		profiles, err := gonetworkmanager.GetConnectionProfilesList(false) 
-		if err != nil { log.Printf("Cmd: Error fetching known profiles: %v", err); return knownNetworksMsg{} }
-		known := make(map[string]gonetworkmanager.ConnectionProfile); var activeConn *gonetworkmanager.ConnectionProfile; var activeDev string
-		activeDevProfiles, _ := gonetworkmanager.GetConnectionProfilesList(true) 
+		if err != nil { 
+			log.Printf("Cmd: Error fetching known profiles: %v", err)
+			return knownNetworksMsg{} 
+		}
+
+		log.Printf("Cmd: Got %d total profiles", len(profiles))
+
+		known := make(map[string]gonetworkmanager.ConnectionProfile)
+		var activeConn *gonetworkmanager.ConnectionProfile
+		var activeDev string
+		
+		activeDevProfiles, _ := gonetworkmanager.GetConnectionProfilesList(true)
+		log.Printf("Cmd: Got %d active profiles", len(activeDevProfiles))
+		
 		activeUUIDs := make(map[string]struct{})
-		for _, adp := range activeDevProfiles { if adp[gonetworkmanager.NmcliFieldConnectionType] == gonetworkmanager.ConnectionTypeWifi { activeUUIDs[adp[gonetworkmanager.NmcliFieldConnectionUUID]] = struct{}{} } }
+		for _, adp := range activeDevProfiles {
+			connType := adp[gonetworkmanager.NmcliFieldConnectionType]
+			log.Printf("Cmd: Active profile type: '%s', UUID: %s", connType, adp[gonetworkmanager.NmcliFieldConnectionUUID])
+			if connType == gonetworkmanager.ConnectionTypeWifi {
+				activeUUIDs[adp[gonetworkmanager.NmcliFieldConnectionUUID]] = struct{}{}
+			}
+		}
+
 		for _, p := range profiles {
-			if p[gonetworkmanager.NmcliFieldConnectionType] == gonetworkmanager.ConnectionTypeWifi {
+			connType := p[gonetworkmanager.NmcliFieldConnectionType]
+			log.Printf("Cmd: Profile '%s' type: '%s'", p[gonetworkmanager.NmcliFieldConnectionName], connType)
+
+			if connType == gonetworkmanager.ConnectionTypeWifi {
 				ssid := gonetworkmanager.GetSSIDFromProfile(p)
-				if ssid != "" { known[ssid] = p 
+				log.Printf("Cmd: WiFi profile SSID from fields: '%s'", ssid)
+
+				// If SSID is not in the profile (which happens with 'nmcli connection show --order name'),
+				// use the connection name as the SSID for WiFi connections
+				if ssid == "" {
+					ssid = p[gonetworkmanager.NmcliFieldConnectionName]
+					log.Printf("Cmd: Using connection name as SSID: '%s'", ssid)
+				}
+
+				if ssid != "" {
+					known[ssid] = p
 					if _, isActive := activeUUIDs[p[gonetworkmanager.NmcliFieldConnectionUUID]]; isActive {
-						pCopy := make(gonetworkmanager.ConnectionProfile); for k,v := range p { pCopy[k]=v }; activeConn = &pCopy; activeDev = p[gonetworkmanager.NmcliFieldConnectionDevice]
+						pCopy := make(gonetworkmanager.ConnectionProfile)
+						for k, v := range p {
+							pCopy[k] = v
+						}
+						activeConn = &pCopy
+						activeDev = p[gonetworkmanager.NmcliFieldConnectionDevice]
+						log.Printf("Cmd: Found active WiFi connection: %s (device: %s)", ssid, activeDev)
 					}
 				}
 			}
 		}
+
 		log.Printf("Cmd: Found %d known Wi-Fi profiles. Active: %v", len(known), activeConn != nil)
 		return knownNetworksMsg{knownProfiles: known, activeWifiConnection: activeConn, activeWifiDevice: activeDev}
 	}
@@ -406,37 +489,188 @@ func connectionProfileToWifiAP(p gonetworkmanager.ConnectionProfile, activeConn 
 	}
 }
 
-func (m *model) processAndSetWifiList(apsToProcess []wifiAP) { /* Same, relies on m.knownProfiles & m.activeWifiConnection being correct */
-	var filteredAps []wifiAP 
-	for _, ap := range apsToProcess { ssid := ap.getSSIDFromScannedAP(); isUnnamed := ssid == "" || ssid == "--"; if m.showHiddenNetworks || !isUnnamed { filteredAps = append(filteredAps, ap) } }
-	enrichedAps := make([]list.Item, len(filteredAps)); foundActive := false 
+func (m *model) applyFilterAndUpdateList() {
+	// Get all items (known + scanned)
+	allItems := m.getAllWifiItems()
+
+	// Apply filter if query is not empty
+	var filteredItems []list.Item
+	if m.filterQuery != "" {
+		query := strings.ToLower(m.filterQuery)
+		for _, item := range allItems {
+			ap := item.(wifiAP)
+			ssid := strings.ToLower(ap.getSSIDFromScannedAP())
+			if strings.Contains(ssid, query) {
+				filteredItems = append(filteredItems, item)
+			}
+		}
+	} else {
+		filteredItems = allItems
+	}
+
+	m.wifiList.SetItems(filteredItems)
+
+	// Update title
+	knownCount := 0
+	availableCount := 0
+	for _, item := range filteredItems {
+		ap := item.(wifiAP)
+		if ap.IsKnown {
+			knownCount++
+		} else {
+			availableCount++
+		}
+	}
+
+	hiddenStatus := ""
+	if !m.showHiddenNetworks {
+		hiddenStatus = listTitleHiddenStatusStyle.Render(" (hiding unnamed)")
+	}
+	filterStatus := ""
+	if m.filterQuery != "" {
+		filterStatus = lipgloss.NewStyle().Foreground(ansPrimaryColor).Render(fmt.Sprintf(" [filtered: %d/%d]", len(filteredItems), len(allItems)))
+	}
+	m.wifiList.Title = fmt.Sprintf("Wi-Fi Networks: %d Known, %d Available%s%s", knownCount, availableCount, hiddenStatus, filterStatus)
+}
+
+func (m *model) getAllWifiItems() []list.Item {
+	log.Printf("GetAllWifiItems: Processing %d scanned APs, %d known profiles, active conn: %v",
+		len(m.allScannedAps), len(m.knownProfiles), m.activeWifiConnection != nil)
+
+	// Deduplicate scanned APs by SSID, keeping the one with the strongest signal
+	deduplicatedAps := make(map[string]wifiAP)
+	for _, ap := range m.allScannedAps {
+		ssid := ap.getSSIDFromScannedAP()
+		if ssid == "" || ssid == "--" {
+			// For hidden networks, each one is unique, so add them all
+			// Use a unique key combining SSID and BSSID if available
+			bssid := ap.WifiAccessPoint[gonetworkmanager.NmcliFieldWifiBSSID]
+			key := "hidden|" + bssid
+			// If BSSID is missing, use a random unique key or just append
+			if bssid == "" {
+				key = fmt.Sprintf("hidden|%d", len(deduplicatedAps))
+			}
+			deduplicatedAps[key] = ap
+		} else {
+			// For named networks, keep the one with the strongest signal
+			newSignal, _ := strconv.Atoi(ap.WifiAccessPoint[gonetworkmanager.NmcliFieldWifiSignal])
+			if existing, ok := deduplicatedAps[ssid]; ok {
+				existingSignal, _ := strconv.Atoi(existing.WifiAccessPoint[gonetworkmanager.NmcliFieldWifiSignal])
+				if newSignal > existingSignal {
+					deduplicatedAps[ssid] = ap
+					log.Printf("ProcessList: Keeping stronger signal for '%s': %d > %d", ssid, newSignal, existingSignal)
+				}
+			} else {
+				deduplicatedAps[ssid] = ap
+			}
+		}
+	}
+
+	// Convert deduplicated map back to slice
+	var deduplicatedSlice []wifiAP
+	for _, ap := range deduplicatedAps {
+		deduplicatedSlice = append(deduplicatedSlice, ap)
+	}
+
+	// First, collect all known profiles that aren't in the scanned list
+	knownNetworksNotInScan := make(map[string]wifiAP)
+	for ssid, profile := range m.knownProfiles {
+		// Check if this known network is in the deduplicated scanned list
+		found := false
+		for _, ap := range deduplicatedSlice {
+			if ap.getSSIDFromScannedAP() == ssid {
+				found = true
+				break
+			}
+		}
+		if !found {
+			// This known profile wasn't scanned, add it to the list
+			knownAP := connectionProfileToWifiAP(profile, m.activeWifiConnection)
+			knownNetworksNotInScan[ssid] = knownAP
+		}
+	}
+
+	// Filter deduplicated APs based on hidden network settings
+	var filteredAps []wifiAP
+	for _, ap := range deduplicatedSlice {
+		ssid := ap.getSSIDFromScannedAP()
+		isUnnamed := ssid == "" || ssid == "--"
+		if m.showHiddenNetworks || !isUnnamed {
+			filteredAps = append(filteredAps, ap)
+		}
+	}
+
+	// Add known networks that weren't in the scan to the filtered list
+	for _, knownAP := range knownNetworksNotInScan {
+		filteredAps = append(filteredAps, knownAP)
+	}
+
+	enrichedAps := make([]list.Item, len(filteredAps))
+	foundActive := false
 	for i, ap := range filteredAps {
-		pAP := ap; ssid := pAP.getSSIDFromScannedAP(); pAP.IsKnown, pAP.IsActive = false, false 
-		if ssid != "" && ssid != "--" { 
-			if profile, ok := m.knownProfiles[ssid]; ok { pAP.IsKnown = true
+		pAP := ap
+		ssid := pAP.getSSIDFromScannedAP()
+		pAP.IsKnown, pAP.IsActive = false, false
+		if ssid != "" && ssid != "--" {
+			if profile, ok := m.knownProfiles[ssid]; ok {
+				pAP.IsKnown = true
 				if m.activeWifiConnection != nil && profile[gonetworkmanager.NmcliFieldConnectionUUID] == (*m.activeWifiConnection)[gonetworkmanager.NmcliFieldConnectionUUID] {
-					pAP.IsActive = true; pAP.Interface = profile[gonetworkmanager.NmcliFieldConnectionDevice]; foundActive = true
+					pAP.IsActive = true
+					pAP.Interface = profile[gonetworkmanager.NmcliFieldConnectionDevice]
+					foundActive = true
 				}
 			}
 		}
 		enrichedAps[i] = pAP
 	}
-	if !foundActive && m.activeWifiConnection != nil { log.Println("ProcessList: Active conn (", gonetworkmanager.GetSSIDFromProfile(*m.activeWifiConnection), ") not in scan.") }
+	if !foundActive && m.activeWifiConnection != nil {
+		log.Println("ProcessList: Active conn (", gonetworkmanager.GetSSIDFromProfile(*m.activeWifiConnection), ") not in scan.")
+	}
 	sort.SliceStable(enrichedAps, func(i, j int) bool {
 		itemI, itemJ := enrichedAps[i].(wifiAP), enrichedAps[j].(wifiAP)
-		if itemI.IsActive != itemJ.IsActive { return itemI.IsActive }
-		if itemI.IsKnown != itemJ.IsKnown { return itemI.IsKnown }
-		sigi, _ := strconv.Atoi(itemI.WifiAccessPoint[gonetworkmanager.NmcliFieldWifiSignal]); sigj, _ := strconv.Atoi(itemJ.WifiAccessPoint[gonetworkmanager.NmcliFieldWifiSignal])
-		if sigi != sigj { return sigi > sigj }
+		if itemI.IsActive != itemJ.IsActive {
+			return itemI.IsActive
+		}
+		if itemI.IsKnown != itemJ.IsKnown {
+			return itemI.IsKnown
+		}
+		sigi, errI := strconv.Atoi(itemI.WifiAccessPoint[gonetworkmanager.NmcliFieldWifiSignal])
+		if errI != nil { sigi = -1 }
+		sigj, errJ := strconv.Atoi(itemJ.WifiAccessPoint[gonetworkmanager.NmcliFieldWifiSignal])
+		if errJ != nil { sigj = -1 }
+
+		// Among known networks, show those in range (signal > 0) before those out of range
+		if itemI.IsKnown && itemJ.IsKnown {
+			inRangeI := sigi > 0
+			inRangeJ := sigj > 0
+			if inRangeI != inRangeJ {
+				return inRangeI
+			}
+		}
+
+		if sigi != sigj {
+			return sigi > sigj
+		}
 		ssidi, ssidj := strings.ToLower(itemI.getSSIDFromScannedAP()), strings.ToLower(itemJ.getSSIDFromScannedAP())
-		isIUn := ssidi == "" || ssidi == "--"; isJUn := ssidj == "" || ssidj == "--"
-		if isIUn && !isJUn { return false }; if !isIUn && isJUn { return true }
+		isIUn := ssidi == "" || ssidi == "--"
+		isJUn := ssidj == "" || ssidj == "--"
+		if isIUn && !isJUn {
+			return false
+		}
+		if !isIUn && isJUn {
+			return true
+		}
 		return ssidi < ssidj
 	})
-	m.wifiList.SetItems(enrichedAps)
-	hiddenStatus := ""; if !m.showHiddenNetworks { hiddenStatus = listTitleHiddenStatusStyle.Render(" (hiding unnamed)") }
-	m.wifiList.Title = fmt.Sprintf("Available Wi-Fi Networks (%d found)%s", len(enrichedAps), hiddenStatus)
+
+	return enrichedAps
 }
+
+func (m *model) processAndSetWifiList(apsToProcess []wifiAP) {
+	m.allScannedAps = apsToProcess
+	m.applyFilterAndUpdateList()
+}
+
 
 func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	var cmds []tea.Cmd; var cmd tea.Cmd
@@ -445,6 +679,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
 		m.width, m.height = msg.Width, msg.Height
+		if m.width == 0 || m.height == 0 { return m, nil }
 		appStyleHorizontalFrame := appStyle.GetHorizontalFrameSize(); appStyleVerticalFrame := appStyle.GetVerticalFrameSize()
 		availableWidth := m.width - appStyleHorizontalFrame; availableHeight := m.height - appStyleVerticalFrame
 		desiredHelpWidth := int(float64(availableWidth) * helpBarWidthPercent); if desiredHelpWidth > helpBarMaxWidth { desiredHelpWidth = helpBarMaxWidth }; if desiredHelpWidth < 20 { desiredHelpWidth = 20 }
@@ -454,14 +689,24 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		footerHeight := lipgloss.Height(m.footerView(availableWidth, m.help.View(tempKeyMapState)))
 		contentAreaHeight := availableHeight - headerHeight - footerHeight
 		if contentAreaHeight < 0 { contentAreaHeight = 0 }
+
+		// Reserve space for filter input if filtering (border + padding + content = ~3 lines)
+		listContentHeight := contentAreaHeight
+		if m.isFiltering {
+			listContentHeight -= 4 // Reserve space for filter input
+			if listContentHeight < 5 {
+				listContentHeight = 5 // Minimum height for list
+			}
+		}
+
 		listWidth := availableWidth
 		if networkListWidthPercent > 0 || networkListFixedWidth > 0 {
 			calcW := availableWidth; if networkListWidthPercent > 0 { calcW = int(float64(availableWidth) * networkListWidthPercent) }
 			if networkListFixedWidth > 0 && calcW > networkListFixedWidth { calcW = networkListFixedWidth }; if calcW < 40 { calcW = 40 }; listWidth = calcW
 		}
 		m.listDisplayWidth = listWidth // Store calculated list width
-		m.wifiList.SetSize(m.listDisplayWidth, contentAreaHeight)
-		m.knownWifiList.SetSize(m.listDisplayWidth, contentAreaHeight)
+		m.wifiList.SetSize(m.listDisplayWidth, listContentHeight)
+		m.knownWifiList.SetSize(m.listDisplayWidth, listContentHeight)
 		m.activeConnInfoViewport.Width = availableWidth - infoBoxStyle.GetHorizontalFrameSize()
 		m.activeConnInfoViewport.Height = contentAreaHeight - infoBoxStyle.GetVerticalFrameSize(); if m.activeConnInfoViewport.Height < 0 {m.activeConnInfoViewport.Height = 0}
 		pwInputContentWidth := availableWidth*2/3; if pwInputContentWidth > 60 { pwInputContentWidth = 60 }; if pwInputContentWidth < 40 { pwInputContentWidth = 40 }
@@ -470,20 +715,82 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case spinner.TickMsg: if m.isLoading { m.spinner, cmd = m.spinner.Update(msg); cmds = append(cmds, cmd) }
 	case wifiStatusMsg:
 		m.isLoading = false
-		if msg.err != nil { if m.state == viewNetworksList { m.connectionStatusMsg = errorStyle.Render(fmt.Sprintf("Error Wi-Fi status: %v", msg.err)) }
+		if msg.err != nil { 
+			if m.state == viewNetworksList { 
+				m.connectionStatusMsg = errorStyle.Render(fmt.Sprintf("Error Wi-Fi status: %v", msg.err)) 
+			}
 		} else {
-			m.wifiEnabled = msg.enabled; statusText := "disabled"; if m.wifiEnabled { statusText = "enabled" }
-			if m.state == viewNetworksList { m.connectionStatusMsg = fmt.Sprintf("Wi-Fi is %s.", statusText) }
-			if m.wifiEnabled { m.isLoading = true; m.wifiList.Title = "Scanning..."; cmds = append(cmds, fetchKnownNetworksCmd(), fetchWifiNetworksCmd(true), m.spinner.Tick)
-			} else { m.allScannedAps = nil; m.processAndSetWifiList([]wifiAP{}); m.wifiList.Title = "Wi-Fi is Disabled"; m.activeWifiConnection = nil; m.activeWifiDevice = ""
-				if m.state == viewNetworksList { m.connectionStatusMsg = "Wi-Fi is disabled." }
+			m.wifiEnabled = msg.enabled
+			statusText := "disabled"
+			if m.wifiEnabled { 
+				statusText = "enabled" 
+			}
+			if m.state == viewNetworksList { 
+				m.connectionStatusMsg = fmt.Sprintf("Wi-Fi is %s.", statusText) 
+			}
+			if m.wifiEnabled { 
+				m.isLoading = true
+				m.isScanning = true
+				// Keep existing cached networks visible while scanning
+				if len(m.allScannedAps) > 0 {
+					m.wifiList.Title = "Scanning..."
+				} else {
+					m.wifiList.Title = "Scanning..."
+				}
+				cmds = append(cmds, fetchKnownNetworksCmd(), fetchWifiNetworksCmd(true), m.spinner.Tick)
+			} else { 
+				m.allScannedAps = nil
+				m.isScanning = false
+				m.processAndSetWifiList([]wifiAP{})
+				m.wifiList.Title = "Wi-Fi is Disabled"
+				m.activeWifiConnection = nil
+				m.activeWifiDevice = ""
+				if m.state == viewNetworksList { 
+					m.connectionStatusMsg = "Wi-Fi is disabled." 
+				}
 			}
 		}
-	case knownNetworksMsg: m.knownProfiles, m.activeWifiConnection, m.activeWifiDevice = msg.knownProfiles, msg.activeWifiConnection, msg.activeWifiDevice; if m.allScannedAps != nil { m.processAndSetWifiList(m.allScannedAps) }
+	case knownNetworksMsg: 
+		m.knownProfiles, m.activeWifiConnection, m.activeWifiDevice = msg.knownProfiles, msg.activeWifiConnection, msg.activeWifiDevice
+		// Always reprocess the list when known networks are updated
+		if len(m.allScannedAps) > 0 {
+			// We have scanned APs, reprocess with updated known profiles
+			m.processAndSetWifiList(m.allScannedAps)
+		} else if m.isLoading || m.isScanning {
+			// Still scanning - keep any cached networks visible or just update title
+			if len(m.allScannedAps) > 0 {
+				m.processAndSetWifiList(m.allScannedAps)
+			}
+			totalKnown := len(m.knownProfiles)
+			if totalKnown > 0 {
+				m.wifiList.Title = fmt.Sprintf("Scanning for networks... (%d known)", totalKnown)
+			} else {
+				m.wifiList.Title = "Scanning..."
+			}
+		}
 	case wifiListLoadedMsg:
-		m.isLoading = false
-		if msg.err != nil { if m.state == viewNetworksList { m.connectionStatusMsg = errorStyle.Render(fmt.Sprintf("Error fetching Wi-Fi: %v", msg.err)) }; m.wifiList.Title = "Error Loading Networks"
-		} else { m.allScannedAps = msg.allAps; m.processAndSetWifiList(m.allScannedAps) }
+		if msg.err != nil { 
+			m.isLoading = false
+			m.isScanning = false
+			if m.state == viewNetworksList { 
+				m.connectionStatusMsg = errorStyle.Render(fmt.Sprintf("Error fetching Wi-Fi: %v", msg.err)) 
+			}
+			m.wifiList.Title = "Error Loading Networks"
+		} else { 
+			// Only update if we have new results
+			if len(msg.allAps) > 0 {
+				m.isLoading = false
+				m.isScanning = false
+				m.allScannedAps = msg.allAps
+				m.processAndSetWifiList(m.allScannedAps)
+				// Cache the networks for next startup
+				go saveCachedNetworks(msg.allAps)
+			} else {
+				// Empty results - this can happen during scanning, so just ignore
+				// Keep displaying cached networks and keep scanning indicator active
+				log.Printf("Scan returned 0 results, keeping cached networks visible")
+			}
+		}
 	case connectionAttemptMsg:
 		m.isLoading = false
 		if msg.success { m.state = viewConnectionResult; m.lastConnectionWasSuccessful = true; m.connectionStatusMsg = successStyle.Render(fmt.Sprintf("Connected to %s!", m.selectedAP.StyledTitle()))
@@ -560,39 +867,87 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		switch m.state {
 		case viewNetworksList:
-			// If the list is filtering, it receives all key events.
-			if m.wifiList.FilterState() == list.Filtering {
-				m.wifiList, cmd = m.wifiList.Update(msg)
-				cmds = append(cmds, cmd)
-
-				// If the user just exited the filter, clear the "Filtering..." status message.
-				if m.wifiList.FilterState() != list.Filtering {
+			// If we're filtering, handle filter input
+			if m.isFiltering {
+				switch {
+				case key.Matches(msg, m.keys.Back) || msg.String() == "esc":
+					// Cancel filtering and clear filter - return to default view
+					m.isFiltering = false
+					m.filterQuery = ""
+					m.filterInput.SetValue("")
+					m.filterInput.Blur()
 					m.connectionStatusMsg = ""
+					m.applyFilterAndUpdateList() // This will show all networks since filterQuery is empty
+					// Trigger resize to restore list height
+					cmds = append(cmds, func() tea.Msg {
+						return tea.WindowSizeMsg{Width: m.width, Height: m.height}
+					})
+					return m, tea.Batch(cmds...)
+
+				case msg.String() == "enter":
+					// Accept filter - keep current filter but stop editing
+					m.isFiltering = false
+					m.filterInput.Blur()
+					m.connectionStatusMsg = ""
+					// Keep the filter query active, just stop showing the input
+					// Trigger resize to restore list height
+					cmds = append(cmds, func() tea.Msg {
+						return tea.WindowSizeMsg{Width: m.width, Height: m.height}
+					})
+					return m, tea.Batch(cmds...)
+
+				default:
+					// Update filter input
+					m.filterInput, cmd = m.filterInput.Update(msg)
+					cmds = append(cmds, cmd)
+					m.filterQuery = m.filterInput.Value()
+					m.applyFilterAndUpdateList()
 				}
-				// Return immediately to prevent the keypress from being processed again.
-				// This is the fix for the Enter key bug.
 				return m, tea.Batch(cmds...)
 			}
 
-			// If we're not filtering, handle keypresses as normal.
+			// Not filtering - handle normal keys
 			if m.isLoading {
 				break
 			}
 
 			switch {
+			case key.Matches(msg, m.keys.Back) || msg.String() == "esc":
+				// If a filter is active (but not currently editing), clear it
+				if m.filterQuery != "" {
+					m.filterQuery = ""
+					m.filterInput.SetValue("")
+					m.connectionStatusMsg = ""
+					m.applyFilterAndUpdateList()
+					break
+				}
+				// Otherwise, let it fall through to default behavior
+				m.wifiList, cmd = m.wifiList.Update(msg)
+				cmds = append(cmds, cmd)
+
 			case key.Matches(msg, m.keys.ToggleHidden):
 				m.showHiddenNetworks = !m.showHiddenNetworks
-				m.processAndSetWifiList(m.allScannedAps)
+				m.applyFilterAndUpdateList()
 				if m.showHiddenNetworks {m.connectionStatusMsg = toggleHiddenStatusMsgStyle.Render("Showing unnamed.")} else {m.connectionStatusMsg = toggleHiddenStatusMsgStyle.Render("Hiding unnamed.")}
 			case key.Matches(msg, m.keys.Filter):
-				m.wifiList.FilterInput.Focus()
-				m.connectionStatusMsg = "Filtering..."
+				// Start filtering
+				m.isFiltering = true
+				m.filterInput.SetValue(m.filterQuery)
+				m.filterInput.Focus()
+				m.connectionStatusMsg = "Type to filter networks, ESC to cancel..."
 				cmds = append(cmds, textinput.Blink)
+				// Trigger resize to adjust list height
+				cmds = append(cmds, func() tea.Msg {
+					return tea.WindowSizeMsg{Width: m.width, Height: m.height}
+				})
 			case key.Matches(msg, m.keys.Refresh):
 				m.isLoading = true
+				m.isScanning = true
 				m.connectionStatusMsg = ""
-				m.allScannedAps = nil
-				m.processAndSetWifiList([]wifiAP{})
+				m.filterQuery = ""
+				m.isFiltering = false
+				m.filterInput.SetValue("")
+				// Don't clear the list - keep showing cached networks while scanning
 				m.wifiList.Title = "Refreshing..."
 				cmds = append(cmds, fetchKnownNetworksCmd(), fetchWifiNetworksCmd(true), m.spinner.Tick)
 			case key.Matches(msg, m.keys.ToggleWifi):
@@ -767,10 +1122,26 @@ func (m model) View() string { /* Same as previous version with "Not enough spac
 	currMainS := ""
 	switch m.state {
 	case viewNetworksList:
-		if m.isLoading && m.wifiList.FilterState() != list.Filtering {
-			currMainS = lipgloss.Place(avW, cdh, lipgloss.Center, lipgloss.Center, m.spinner.Style.Render(lipgloss.JoinHorizontal(lipgloss.Left, m.spinner.View()+" ", m.wifiList.Title)))
+		// Always show the list, even when loading
+		listR := m.wifiList.View()
+
+		// Render filter input if filtering
+		if m.isFiltering {
+			filterStyle := lipgloss.NewStyle().
+				BorderStyle(lipgloss.RoundedBorder()).
+				BorderForeground(lipgloss.Color("62")).
+				Padding(0, 1)
+			filterR := filterStyle.Render(m.filterInput.View())
+
+			// Combine list and filter vertically
+			combined := lipgloss.JoinVertical(lipgloss.Top, listR, "", filterR)
+
+			if networkListWidthPercent > 0 || networkListFixedWidth > 0 {
+				currMainS = lipgloss.PlaceHorizontal(avW, lipgloss.Center, combined)
+			} else {
+				currMainS = combined
+			}
 		} else {
-			listR := m.wifiList.View()
 			if networkListWidthPercent > 0 || networkListFixedWidth > 0 {
 				currMainS = lipgloss.PlaceHorizontal(avW, lipgloss.Center, listR)
 			} else {
@@ -790,7 +1161,7 @@ func (m model) View() string { /* Same as previous version with "Not enough spac
 				}
 				statusR = style.Render(m.connectionStatusMsg)
 			}
-			if (!m.isLoading || m.wifiList.FilterState() == list.Filtering) {
+			if (!m.isLoading || m.isFiltering) {
 				if lipgloss.Height(currMainS)+lipgloss.Height(statusR) <= cdh {
 					currMainS = lipgloss.JoinVertical(lipgloss.Top, currMainS, statusR)
 				} else {
@@ -855,9 +1226,49 @@ func (m model) View() string { /* Same as previous version with "Not enough spac
 	mainSb.WriteString(currMainS)
 	return appStyle.Render(lipgloss.JoinVertical(lipgloss.Top, hView, mainSb.String(), fView))
 }
-func (m model) headerView(w int) string { /* Same */ 
-	s := "Wi-Fi: "; if m.wifiEnabled { s += wifiStatusStyleEnabled.Render("Enabled ✔") } else { s += wifiStatusStyleDisabled.Render("Disabled ✘") }; t := titleStyle.Render("Go Network Manager TUI")
-	sp := w - lipgloss.Width(t) - lipgloss.Width(s); if sp < 1 { sp = 1 }; return lipgloss.JoinHorizontal(lipgloss.Left, t, strings.Repeat(" ", sp), s)
+func (m model) headerView(w int) string {
+	t := titleStyle.Render("Go Network Manager TUI")
+
+	// Scanning indicator
+	scanIndicator := ""
+	if m.isScanning {
+		scanIndicator = connectingStyle.Render(" " + m.spinner.View() + " Scanning...")
+	}
+
+	s := "Wi-Fi: "
+	if m.wifiEnabled {
+		s += wifiStatusStyleEnabled.Render("Enabled ✔")
+	} else {
+		s += wifiStatusStyleDisabled.Render("Disabled ✘")
+	}
+
+	// Calculate spacing
+	fixedWidth := lipgloss.Width(t) + lipgloss.Width(s)
+	scanWidth := lipgloss.Width(scanIndicator)
+	totalWidth := fixedWidth + scanWidth
+
+	if totalWidth >= w {
+		// Not enough space, just show title and status
+		sp := w - fixedWidth
+		if sp < 1 {
+			sp = 1
+		}
+		return lipgloss.JoinHorizontal(lipgloss.Left, t, strings.Repeat(" ", sp), s)
+	}
+
+	// Distribute remaining space
+	remainingSpace := w - totalWidth
+	leftSpace := remainingSpace / 2
+	rightSpace := remainingSpace - leftSpace
+
+	if leftSpace < 1 {
+		leftSpace = 1
+	}
+	if rightSpace < 1 {
+		rightSpace = 1
+	}
+
+	return lipgloss.JoinHorizontal(lipgloss.Left, t, strings.Repeat(" ", leftSpace), scanIndicator, strings.Repeat(" ", rightSpace), s)
 }
 func (m model) footerView(w int, h string) string { /* Same */ return lipgloss.PlaceHorizontal(w, lipgloss.Center, helpGlobalStyle.Render(h)) }
 
