@@ -62,6 +62,7 @@ This document outlines all the changes made to the nmtui-go project during devel
 ### Bug Fixes
 
 - **Fixed filtering during scanning/refreshing**: Custom filtering logic now works properly when pressing `/` during scanning or refreshing operations, instead of triggering Bubble Tea's built-in list filtering
+- **Fixed disconnect dialog showing wrong network name**: Pressing 'D' to disconnect now correctly shows the actual network name instead of "<Hidden Network>" by using the active network from the list when available
 
 ## Technical Improvements
 

@@ -1118,10 +1118,26 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 			case key.Matches(msg, m.keys.Disconnect):
 				if m.activeWifiConnection != nil {
-					sAP := gonetworkmanager.GetSSIDFromProfile(*m.activeWifiConnection)
-					td := make(gonetworkmanager.WifiAccessPoint)
-					td[gonetworkmanager.NmcliFieldWifiSSID] = sAP
-					m.selectedAP = wifiAP{WifiAccessPoint: td, IsActive: true, IsKnown: true, Interface: m.activeWifiDevice}
+					// Try to find the active network in the current list first
+					foundActive := false
+					if items := m.wifiList.Items(); len(items) > 0 {
+						for _, item := range items {
+							if ap, ok := item.(wifiAP); ok && ap.IsActive {
+								m.selectedAP = ap
+								foundActive = true
+								break
+							}
+						}
+					}
+
+					// If not found in list, create a minimal wifiAP from the profile
+					if !foundActive {
+						sAP := gonetworkmanager.GetSSIDFromProfile(*m.activeWifiConnection)
+						td := make(gonetworkmanager.WifiAccessPoint)
+						td[gonetworkmanager.NmcliFieldWifiSSID] = sAP
+						m.selectedAP = wifiAP{WifiAccessPoint: td, IsActive: true, IsKnown: true, Interface: m.activeWifiDevice}
+					}
+
 					m.state = viewConfirmDisconnect
 					m.connectionStatusMsg = ""
 				} else {
@@ -1392,9 +1408,9 @@ func (m model) View() string { /* Same as previous version with "Not enough spac
 	case viewActiveConnectionInfo:
 		currMainS = m.activeConnInfoViewport.View()
 	case viewConfirmDisconnect:
-		currMainS = lipgloss.JoinVertical(lipgloss.Center, fmt.Sprintf("Disconnect from %s?", m.selectedAP.StyledTitle()), "\n", lipgloss.NewStyle().Foreground(ansFaintTextColor).Render("(Enter to confirm, Esc to cancel)"))
+		currMainS = lipgloss.JoinVertical(lipgloss.Center, fmt.Sprintf("Disconnect from %s ?", m.selectedAP.StyledTitle()), "\n", lipgloss.NewStyle().Foreground(ansFaintTextColor).Render("(Enter to confirm, Esc to cancel)"))
 	case viewConfirmForget:
-		currMainS = lipgloss.JoinVertical(lipgloss.Center, fmt.Sprintf("Forget profile for\n%s?", m.selectedAP.StyledTitle()), "\n", lipgloss.NewStyle().Foreground(ansFaintTextColor).Render("(Enter to confirm, Esc to cancel)"))
+		currMainS = lipgloss.JoinVertical(lipgloss.Center, fmt.Sprintf("Forget profile for\n%s ?", m.selectedAP.StyledTitle()), "\n", lipgloss.NewStyle().Foreground(ansFaintTextColor).Render("(Enter to confirm, Esc to cancel)"))
 	}
 	if m.state != viewNetworksList && m.state != viewActiveConnectionInfo {
 		currMainS = lipgloss.Place(avW, cdh, lipgloss.Center, lipgloss.Center, currMainS)
