@@ -21,7 +21,6 @@ This document outlines all the changes made to the nmtui-go project during devel
 
 ### Scanning Indicator
 - Modified `headerView()` to display a spinner between "Network Manager" and "Wi-Fi:<status>" when scanning
-- Changed spinner type from `spinner.Globe` to `spinner.Dot` for better visual appearance
 
 ## Phase 3: Bug Fixes (Network Disappearing During Scan)
 
@@ -60,6 +59,9 @@ This document outlines all the changes made to the nmtui-go project during devel
 - Implemented deduplication of networks by SSID, keeping the one with the strongest signal
 - Modified `getAllWifiItems()` to consolidate duplicate access points
 - Updated filtering logic to work with deduplicated list
+
+### Bug Fixes
+- **Fixed filtering during scanning/refreshing**: Custom filtering logic now works properly when pressing `/` during scanning or refreshing operations, instead of triggering Bubble Tea's built-in list filtering
 
 ## Technical Improvements
 - **Unified list**: Single network list combining known and scanned networks with clear status indicators

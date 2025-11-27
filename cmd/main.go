@@ -309,7 +309,7 @@ func initialModel() model {
 	fi.Cursor.Style = lipgloss.NewStyle().Foreground(ansPrimaryColor)
 
 	s := spinner.New()
-	s.Spinner = spinner.Jump
+	s.Spinner = spinner.Globe
 	s.Style = connectingStyle
 	vp := viewport.New(0, 0)
 	vp.Style = infoBoxStyle.Copy()
@@ -1036,9 +1036,24 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, tea.Batch(cmds...)
 			}
 
+			// Check for Filter key binding even when loading
+			if key.Matches(msg, m.keys.Filter) {
+				// Start filtering
+				m.isFiltering = true
+				m.filterInput.SetValue(m.filterQuery)
+				m.filterInput.Focus()
+				m.connectionStatusMsg = "Type to filter networks, ESC to cancel..."
+				cmds = append(cmds, textinput.Blink)
+				// Trigger resize to adjust list height
+				cmds = append(cmds, func() tea.Msg {
+					return tea.WindowSizeMsg{Width: m.width, Height: m.height}
+				})
+				return m, tea.Batch(cmds...)
+			}
+
 			// Not filtering - handle normal keys
 			if m.isLoading {
-				// While loading, still allow list navigation
+				// While loading, still allow list navigation (but Filter key is handled above)
 				m.wifiList, cmd = m.wifiList.Update(msg)
 				cmds = append(cmds, cmd)
 				break
@@ -1069,6 +1084,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 
 			case key.Matches(msg, m.keys.Filter):
+				// This should not be reached since Filter is handled above, but keeping for completeness
 				// Start filtering
 				m.isFiltering = true
 				m.filterInput.SetValue(m.filterQuery)
