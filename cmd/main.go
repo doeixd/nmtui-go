@@ -27,6 +27,7 @@ import (
 
 const (
 	debugLogFile            = "nmtui-debug.log"
+	appName                 = "Network Manager"
 	cacheFile               = "/tmp/nmtui-cache.json"
 	helpBarMaxWidth         = 80
 	helpBarWidthPercent     = 0.80
@@ -1419,7 +1420,7 @@ func (m model) View() string { /* Same as previous version with "Not enough spac
 	return appStyle.Render(lipgloss.JoinVertical(lipgloss.Top, hView, mainSb.String(), fView))
 }
 func (m model) headerView(w int) string {
-	t := titleStyle.Render("Network Manager")
+	t := titleStyle.Render(appName)
 
 	// Scanning indicator
 	scanIndicator := ""
