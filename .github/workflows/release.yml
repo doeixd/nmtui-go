@@ -3,7 +3,7 @@ name: Release
 on:
   push:
     tags:
-      - 'v*' # Triggers on tags like v1.0.0, v1.2.3, etc.
+      - "v*" # Triggers on tags like v1.0.0, v1.2.3, etc.
 
 permissions:
   contents: write
@@ -21,7 +21,7 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
-          go-version: 'stable'
+          go-version: "stable"
           cache: true
 
       - name: Run GoReleaser
