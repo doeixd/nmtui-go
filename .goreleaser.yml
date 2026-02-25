@@ -7,7 +7,7 @@ before:
 builds:
   - id: nmtui-go-linux
     binary: nmtui-go
-    main: ./cmd/main.go
+    main: ./cmd
     env:
       - CGO_ENABLED=0
     goos:
