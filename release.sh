@@ -70,6 +70,10 @@ if [ "$current_branch" != "$DEFAULT_BRANCH" ]; then
     exit 1
   fi
 fi
+
+echo "Pulling latest '$DEFAULT_BRANCH' from '$REMOTE_NAME'..."
+git pull --ff-only "$REMOTE_NAME" "$DEFAULT_BRANCH"
+
 echo "✓ On branch '$DEFAULT_BRANCH'."
 
 # 3. Fetch latest tags from remote

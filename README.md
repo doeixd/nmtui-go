@@ -22,7 +22,7 @@ A Terminal User Interface (TUI) for managing NetworkManager Wi-Fi connections on
 *   **At-a-Glance Information:** Clearly displays available networks, signal strength, security, and connection status.
 *   **Simplified Workflow:** Streamlines common tasks like scanning, connecting to open/secured networks, and viewing connection details.
 *   **Lightweight & Performant:** Built with Go, it's a single, relatively small binary with minimal dependencies (beyond NetworkManager itself).
-*   **Responsive Design:** Adapts to different terminal sizes and themes (supports adaptive colors for light/dark modes).
+*   **Responsive Design:** Adapts to different terminal sizes.
 *   **Informative Feedback:** Provides clear status messages for connection attempts, errors, and other operations.
 
 ## Features
@@ -39,7 +39,7 @@ A Terminal User Interface (TUI) for managing NetworkManager Wi-Fi connections on
     *   Sorts networks by active, known, and then signal strength.
 *   **Active Connection Info:** Display detailed information about the current active Wi-Fi connection (IP address, MAC, gateway, DNS, etc.).
 *   **Manage Wi-Fi Radio:** Toggle the Wi-Fi radio on/off.
-*   **Manage Known Profiles:** View a list of all known Wi-Fi profiles and "forget" them, even if they are not currently in scan range.
+*   **Manage Known Profiles (CRUD):** View, inspect details, create, edit, and forget Wi-Fi profiles, even if they are not currently in scan range.
 *   **Disconnect:** Disconnect from the currently active Wi-Fi network.
 *   **Filtering:** Filter the network list by SSID.
 *   **Responsive Layout:** UI elements adjust to terminal window size.
@@ -83,6 +83,13 @@ nmtui-go
 
 The application will start, scan for Wi-Fi networks, and display them in a list.
 
+You can also use:
+
+```bash
+nmtui-go --help
+nmtui-go --version
+```
+
 **Keybindings:**
 
 The most common keybindings are displayed in the help bar at the bottom. Press `?` to toggle a more detailed help view.
@@ -104,9 +111,17 @@ The most common keybindings are displayed in the help bar at the bottom. Press `
 *   **`d`:** Disconnect from the current active Wi-Fi network (will prompt for confirmation).
 *   **`i`:** Show detailed information about the currently active Wi-Fi connection.
 *   **`p`:** View and manage all known Wi-Fi connection profiles.
+*   **`n`:** In profiles view, create a new Wi-Fi profile.
+*   **`e`:** In profiles/details view, edit the selected Wi-Fi profile.
 *   **`ctrl+f`:** In the scan list or profiles list, forget the selected network profile.
+*   **`ctrl+x`:** In profile create/edit form, clear password for save.
 *   **`?`:** Toggle between short and full help display at the bottom.
-*   **`q` / `Ctrl+C`:** Quit the application.
+*   **`q` / `Ctrl+C`:** Quit the application (`q` does not quit while typing in text inputs).
+
+**Profile form notes:**
+
+*   `Esc` from profile create/edit with unsaved changes requires pressing `Esc` again to confirm discard.
+*   Profile edits and deletes are UUID-targeted to avoid name collision mistakes.
 
 ## How It's Made
 
@@ -153,7 +168,7 @@ Releases are automated using [GoReleaser](https://goreleaser.com/) and [GitHub A
     ```bash
     DEBUG_TEA=1 nmtui-go
     ```
-    This will create a `nmtui-debug.log` file in the directory where you run the command. This log contains detailed information about `nmcli` commands being executed and any errors, which can be very helpful for diagnosing problems. Please include relevant parts of this log if you are reporting an issue.
+    This will create a `nmtui-debug.log` file in the directory where you run the command. This log contains detailed information about `nmcli` commands being executed and any errors, which can be very helpful for diagnosing problems. Sensitive command arguments such as passwords are redacted. Please include relevant parts of this log if you are reporting an issue.
 *   **Linux Only:** This tool is designed for Linux systems running NetworkManager. It will not work on macOS or Windows as it depends on `nmcli`.
 
 ## Contributing

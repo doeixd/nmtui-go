@@ -1,3 +1,7 @@
 *.bak
 *.log
 .vscode
+*.exe
+nmtui-go
+nmtui-go.exe
+cmd/main.go.backup
