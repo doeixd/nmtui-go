@@ -13,7 +13,10 @@ import (
 	"strconv" // For parseDeviceState and others
 	"strings"
 	"syscall" // For ActivityMonitor signal handling
+	"time"
 )
+
+const nmcliCommandTimeout = 45 * time.Second
 
 // --- Constants for nmcli field names ---
 const (
@@ -43,8 +46,6 @@ const (
 	NmcliFieldDeviceStatusState  = "STATE"
 	NmcliFieldDeviceStatusConn   = "CONNECTION"
 
-	
-	
 	ConnectionTypeWifi = "wifi"
 	// connectionTypeEth    = "ethernet" // Already have this effectively with NmcliFieldConnectionType
 	keyMgmtWPAPSK      = "wpa-psk"
@@ -87,6 +88,16 @@ type ConnectionProfile map[string]string
 type WifiAccessPoint map[string]string
 type WifiCredentialsType map[string]string
 type StopActivityMonitorFn func() error
+
+type WifiProfileSpec struct {
+	Name        string
+	SSID        string
+	Security    string
+	Password    string
+	Hidden      bool
+	Autoconnect bool
+	Priority    *int
+}
 
 // --- Core nmcli Interaction ---
 func parseNmcliMultilineOutput(output string) ([]map[string]string, error) {
@@ -136,31 +147,102 @@ func parseNmcliMultilineOutput(output string) ([]map[string]string, error) {
 }
 
 func runNmcli(args ...string) (string, error) {
-	cmd := exec.Command("nmcli", args...)
+	ctx, cancel := context.WithTimeout(context.Background(), nmcliCommandTimeout)
+	defer cancel()
+
+	cmd := exec.CommandContext(ctx, "nmcli", args...)
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
-	log.Printf("Executing nmcli command: %v", cmd.Args)
+	log.Printf("Executing nmcli command: nmcli %s", strings.Join(redactNmcliArgs(args), " "))
 	err := cmd.Run()
 	stderrStr := strings.TrimSpace(stderr.String())
+	stderrStr = redactSensitiveValues(stderrStr, args)
 	stdoutStr := strings.TrimSpace(stdout.String())
+	argLine := strings.Join(redactNmcliArgs(args), " ")
+
+	if ctx.Err() == context.DeadlineExceeded {
+		return stdoutStr, fmt.Errorf("nmcli command '%s' timed out after %s", argLine, nmcliCommandTimeout)
+	}
+
 	if err != nil {
 		if stderrStr != "" {
-			log.Printf("nmcli command '%s' stderr: %s", strings.Join(args, " "), stderrStr)
-			return stdoutStr, fmt.Errorf("nmcli command '%s' failed: %s (underlying error: %w)", strings.Join(args, " "), stderrStr, err)
+			log.Printf("nmcli command '%s' stderr: %s", argLine, stderrStr)
+			return stdoutStr, fmt.Errorf("nmcli command '%s' failed: %s (underlying error: %w)", argLine, stderrStr, err)
 		}
-		return stdoutStr, fmt.Errorf("nmcli command '%s' failed: %w", strings.Join(args, " "), err)
+		return stdoutStr, fmt.Errorf("nmcli command '%s' failed: %w", argLine, err)
 	}
 	if stderrStr != "" {
-		log.Printf("nmcli command '%s' succeeded but produced stderr (warning): %s", strings.Join(args, " "), stderrStr)
+		log.Printf("nmcli command '%s' succeeded but produced stderr (warning): %s", argLine, stderrStr)
 	}
 	return stdoutStr, nil
+}
+
+func redactSensitiveValues(s string, args []string) string {
+	if s == "" {
+		return s
+	}
+	for _, secret := range extractSecretValues(args) {
+		if secret == "" {
+			continue
+		}
+		s = strings.ReplaceAll(s, secret, "<redacted>")
+	}
+	return s
+}
+
+func extractSecretValues(args []string) []string {
+	var values []string
+	for i := 0; i < len(args); i++ {
+		k := strings.ToLower(args[i])
+		if isSecretArgKey(k) && i+1 < len(args) {
+			values = append(values, args[i+1])
+			i++
+			continue
+		}
+
+		parts := strings.SplitN(args[i], "=", 2)
+		if len(parts) == 2 && isSecretArgKey(strings.ToLower(parts[0])) {
+			values = append(values, parts[1])
+		}
+	}
+	return values
+}
+
+func redactNmcliArgs(args []string) []string {
+	redacted := make([]string, len(args))
+	copy(redacted, args)
+
+	for i := 0; i < len(redacted); i++ {
+		k := strings.ToLower(redacted[i])
+		if isSecretArgKey(k) && i+1 < len(redacted) {
+			redacted[i+1] = "<redacted>"
+			i++
+			continue
+		}
+
+		parts := strings.SplitN(redacted[i], "=", 2)
+		if len(parts) == 2 && isSecretArgKey(strings.ToLower(parts[0])) {
+			redacted[i] = parts[0] + "=<redacted>"
+		}
+	}
+
+	return redacted
+}
+
+func isSecretArgKey(k string) bool {
+	switch k {
+	case "password", "wifi-sec.psk", "psk", "pin":
+		return true
+	default:
+		return strings.HasSuffix(k, ".psk")
+	}
 }
 func cliInternal(args ...string) (string, error) { return runNmcli(args...) }
 func clibInternal(args ...string) ([]map[string]string, error) {
 	output, err := runNmcli(args...)
 	if err != nil {
-		return nil, fmt.Errorf("nmcli for multiline failed (args: %v): %w", args, err)
+		return nil, fmt.Errorf("nmcli for multiline failed (args: %v): %w", redactNmcliArgs(args), err)
 	}
 	return parseNmcliMultilineOutput(output)
 }
@@ -320,6 +402,20 @@ func GetConnectionProfilesList(activeOnly bool) ([]ConnectionProfile, error) {
 		profiles[i] = ConnectionProfile(rp)
 	}
 	return profiles, nil
+}
+
+func GetConnectionProfileByID(profileIdentifier string) (ConnectionProfile, error) {
+	if strings.TrimSpace(profileIdentifier) == "" {
+		return nil, fmt.Errorf("profile identifier cannot be empty")
+	}
+	data, err := clibInternal("-m", "multiline", "connection", "show", profileIdentifier)
+	if err != nil {
+		return nil, err
+	}
+	if len(data) == 0 {
+		return nil, nil
+	}
+	return ConnectionProfile(data[0]), nil
 }
 
 // ChangeDnsConnection modifies DNS servers for a connection profile.
@@ -597,6 +693,99 @@ func WifiConnect(ssid string, password string, hidden bool) (string, error) {
 	if hidden {
 		args = append(args, "hidden", "yes")
 	}
+	return cliInternal(args...)
+}
+
+func normalizeWifiSecurityMode(raw string) string {
+	s := strings.ToLower(strings.TrimSpace(raw))
+	switch s {
+	case "", "open", "none":
+		return "open"
+	default:
+		return "wpa-psk"
+	}
+}
+
+func CreateWifiProfile(spec WifiProfileSpec) (string, error) {
+	name := strings.TrimSpace(spec.Name)
+	ssid := strings.TrimSpace(spec.SSID)
+	if name == "" {
+		return "", fmt.Errorf("profile name cannot be empty")
+	}
+	if ssid == "" {
+		return "", fmt.Errorf("ssid cannot be empty")
+	}
+
+	security := normalizeWifiSecurityMode(spec.Security)
+	args := []string{"connection", "add", "type", ConnectionTypeWifi, "con-name", name, "ifname", "*", "ssid", ssid}
+
+	if security == "wpa-psk" {
+		if strings.TrimSpace(spec.Password) == "" {
+			return "", fmt.Errorf("password cannot be empty for wpa-psk")
+		}
+		args = append(args, "wifi-sec.key-mgmt", keyMgmtWPAPSK, "wifi-sec.psk", spec.Password)
+	}
+
+	if spec.Hidden {
+		args = append(args, "802-11-wireless.hidden", "yes")
+	} else {
+		args = append(args, "802-11-wireless.hidden", "no")
+	}
+
+	if spec.Autoconnect {
+		args = append(args, "connection.autoconnect", "yes")
+	} else {
+		args = append(args, "connection.autoconnect", "no")
+	}
+
+	if spec.Priority != nil {
+		args = append(args, "connection.autoconnect-priority", strconv.Itoa(*spec.Priority))
+	}
+
+	return cliInternal(args...)
+}
+
+func UpdateWifiProfile(profileIdentifier string, spec WifiProfileSpec, passwordProvided bool, clearPassword bool) (string, error) {
+	id := strings.TrimSpace(profileIdentifier)
+	if id == "" {
+		return "", fmt.Errorf("profile identifier cannot be empty")
+	}
+
+	name := strings.TrimSpace(spec.Name)
+	ssid := strings.TrimSpace(spec.SSID)
+	if name == "" {
+		return "", fmt.Errorf("profile name cannot be empty")
+	}
+	if ssid == "" {
+		return "", fmt.Errorf("ssid cannot be empty")
+	}
+
+	security := normalizeWifiSecurityMode(spec.Security)
+	args := []string{"connection", "modify", id,
+		"con-name", name,
+		"802-11-wireless.ssid", ssid,
+		"802-11-wireless.hidden", map[bool]string{true: "yes", false: "no"}[spec.Hidden],
+		"connection.autoconnect", map[bool]string{true: "yes", false: "no"}[spec.Autoconnect],
+	}
+
+	if spec.Priority != nil {
+		args = append(args, "connection.autoconnect-priority", strconv.Itoa(*spec.Priority))
+	}
+
+	if security == "open" {
+		args = append(args, "wifi-sec.key-mgmt", "", "wifi-sec.psk", "")
+	} else {
+		args = append(args, "wifi-sec.key-mgmt", keyMgmtWPAPSK)
+		if clearPassword {
+			args = append(args, "wifi-sec.psk", "")
+		} else if passwordProvided {
+			if strings.TrimSpace(spec.Password) == "" {
+				return "", fmt.Errorf("password cannot be empty for wpa-psk when provided")
+			}
+			args = append(args, "wifi-sec.psk", spec.Password)
+		}
+	}
+
 	return cliInternal(args...)
 }
 
