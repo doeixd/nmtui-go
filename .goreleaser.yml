@@ -21,6 +21,7 @@ builds:
       - -X main.Commit={{.Commit}}
       - -X main.BuildDate={{.Date}}
       - -X main.AppName={{.ProjectName}}
+      - -X main.InstallMethod=github
     tags:
       - netgo
       - osusergo
@@ -55,8 +56,8 @@ changelog:
       - "Merge branch"
 
 release:
-  # github:
-  #   owner: doeixd
-  #   name: nmtui-go
+  github:
+    owner: doeixd
+    name: nmtui-go
   prerelease: auto # Marks pre-releases based on tag format (e.g., v0.1.0-beta)
   name_template: "{{.ProjectName}} {{.Tag}}"

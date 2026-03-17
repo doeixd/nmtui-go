@@ -858,34 +858,6 @@ func AddWifiConnectionPSK(profileName, ifname, ssid, password string) (string, e
 	return cliInternal(args...)
 }
 
-// func AddWifiConnectionPSK(profileName, ifname, ssid, password string) (string, error) {
-// if strings.TrimSpace(profileName) == "" { return "", fmt.Errorf("profile name empty") }
-// if strings.TrimSpace(ssid) == "" { return "", fmt.Errorf("SSID empty") }
-// if strings.TrimSpace(password) == "" { return "", fmt.Errorf("password empty for WPA-PSK") }
-// if ifname == "" { ifname = "*" }
-//
-// profiles, err := GetConnectionProfilesList(false)
-// if err != nil { return "", fmt.Errorf("could not list profiles: %w", err) }
-// var existingProfile ConnectionProfile
-// for _, p := range profiles {
-// 	if p[NmcliFieldConnectionName] == profileName { existingProfile = p; break }
-// 	profileSSID := GetSSIDFromProfile(p)
-// 	if profileSSID == ssid && p[NmcliFieldConnectionType] == ConnectionTypeWifi { existingProfile = p; break }
-// }
-//
-// var args []string
-// if existingProfile != nil {
-// 	connIDToModify := existingProfile[NmcliFieldConnectionName]
-// 	if connIDToModify == "" { connIDToModify = existingProfile[NmcliFieldConnectionUUID] }
-// 	log.Printf("Modifying existing Wi-Fi profile: %s", connIDToModify)
-// 	args = []string{ "connection", "modify", connIDToModify, wifiSecKeyMgmt, keyMgmtWPAPSK, wifiSecPSK, password, "ssid", ssid, "connection.interface-name", ifname }
-// } else {
-// 	log.Printf("Adding new Wi-Fi profile: %s for SSID: %s", profileName, ssid)
-// 	args = []string{ "connection", "add", "type", ConnectionTypeWifi, "con-name", profileName, "ifname", ifname, "ssid", ssid, wifiSecKeyMgmt, keyMgmtWPAPSK, wifiSecPSK, password }
-// }
-// return cliInternal(args...)
-// }
-
 func ConnectToWifiRobustly(profileNameBase, ifname, ssid, password string, hidden bool) (string, error) {
 	log.Printf("Robust connect attempt for SSID: %s", ssid)
 	output, err := WifiConnect(ssid, password, hidden)
