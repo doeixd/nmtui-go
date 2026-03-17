@@ -42,6 +42,8 @@ A Terminal User Interface (TUI) for managing NetworkManager Wi-Fi connections on
 *   **Manage Known Profiles (CRUD):** View, inspect details, create, edit, and forget Wi-Fi profiles, even if they are not currently in scan range.
 *   **Disconnect:** Disconnect from the currently active Wi-Fi network.
 *   **Filtering:** Filter the network list by SSID.
+*   **Vim-style Navigation:** `h`/`j`/`k`/`l` keys work alongside arrow keys for navigation (disabled in text input fields).
+*   **In-TUI Self-Update:** Check for and install updates directly from the TUI with `Shift+U`, with automatic backup and rollback.
 *   **Responsive Layout:** UI elements adjust to terminal window size.
 *   **Help View:** In-app help displays available keybindings, togglable between short and full views.
 
@@ -94,13 +96,13 @@ nmtui-go --version
 
 The most common keybindings are displayed in the help bar at the bottom. Press `?` to toggle a more detailed help view.
 
-*   **Arrow Keys (↑ / ↓):** Navigate the network list.
-*   **Enter:**
+*   **Arrow Keys (↑ / ↓) or `j` / `k`:** Navigate the network list or scroll viewports.
+*   **Enter or `l`:**
     *   Select a network to connect.
     *   Confirm password input.
     *   Confirm disconnection.
     *   Dismiss connection result messages.
-*   **Esc:**
+*   **Esc or `h`:**
     *   Go back from password input or other views.
     *   Cancel filtering.
     *   Dismiss connection result messages.
@@ -115,6 +117,7 @@ The most common keybindings are displayed in the help bar at the bottom. Press `
 *   **`e`:** In profiles/details view, edit the selected Wi-Fi profile.
 *   **`ctrl+f`:** In the scan list or profiles list, forget the selected network profile.
 *   **`ctrl+x`:** In profile create/edit form, clear password for save.
+*   **`Shift+U`:** Start an in-TUI self-update (when an update is available).
 *   **`?`:** Toggle between short and full help display at the bottom.
 *   **`q` / `Ctrl+C`:** Quit the application (`q` does not quit while typing in text inputs).
 
@@ -122,6 +125,19 @@ The most common keybindings are displayed in the help bar at the bottom. Press `
 
 *   `Esc` from profile create/edit with unsaved changes requires pressing `Esc` again to confirm discard.
 *   Profile edits and deletes are UUID-targeted to avoid name collision mistakes.
+
+## Self-Update
+
+`nmtui-go` can check for and install updates directly from within the TUI. When a new release is available, press `Shift+U` to update in place. The old binary is backed up automatically and can be rolled back if something goes wrong.
+
+**Environment Variables:**
+
+| Variable | Description |
+|---|---|
+| `NMTUI_NO_UPDATE_CHECK=1` | Disable automatic update checks on startup |
+| `NMTUI_UPDATE_KEEP_BACKUP=1` | Keep the backup of the old binary after a successful update |
+| `NMTUI_UPDATE_PRERELEASE=1` | Include prerelease/beta versions when checking for updates |
+| `GITHUB_TOKEN` | Optional GitHub token for higher API rate limits |
 
 ## How It's Made
 
@@ -180,14 +196,6 @@ Contributions are welcome! If you'd like to contribute, please:
 3.  Make your changes.
 4.  Ensure your code is formatted (`gofmt` or `goimports`).
 5.  Open a Pull Request with a clear description of your changes.
-
-<!-- Optional:
-## Future Ideas / Roadmap
-*   Support for more Wi-Fi security types (e.g., WPA3, Enterprise).
-*   Managing wired connections.
-*   Editing existing connection profiles.
-*   More detailed error parsing and user-friendly messages.
--->
 
 ## License
 
