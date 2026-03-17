@@ -293,10 +293,10 @@ func (k keyMap) FullHelp() [][]key.Binding {
 }
 
 var defaultKeyBindings = keyMap{
-	Connect:      key.NewBinding(key.WithKeys("enter"), key.WithHelp("enter", "select/conn/confirm")),
+	Connect:      key.NewBinding(key.WithKeys("enter"), key.WithHelp("enter/l", "select/conn/confirm")),
 	Refresh:      key.NewBinding(key.WithKeys("r"), key.WithHelp("r", "refresh")),
 	Quit:         key.NewBinding(key.WithKeys("q", "ctrl+c"), key.WithHelp("q", "quit")),
-	Back:         key.NewBinding(key.WithKeys("esc"), key.WithHelp("esc", "back/cancel")),
+	Back:         key.NewBinding(key.WithKeys("esc"), key.WithHelp("esc/h", "back/cancel")),
 	Help:         key.NewBinding(key.WithKeys("?"), key.WithHelp("?", "help")),
 	Filter:       key.NewBinding(key.WithKeys("/"), key.WithHelp("/", "filter")),
 	ToggleWifi:   key.NewBinding(key.WithKeys("t"), key.WithHelp("t", "toggle Wi-Fi")),
@@ -1230,7 +1230,7 @@ func (m *model) handleKnownNetworksListKeys(msg tea.KeyMsg) []tea.Cmd {
 	var cmds []tea.Cmd
 	if m.isLoading {
 		switch {
-		case key.Matches(msg, m.keys.Back):
+		case key.Matches(msg, m.keys.Back) || msg.String() == "h":
 			m.state = viewNetworksList
 			m.clearStatus()
 			m.resizeComponents()
@@ -1242,12 +1242,12 @@ func (m *model) handleKnownNetworksListKeys(msg tea.KeyMsg) []tea.Cmd {
 		}
 	}
 	switch {
-	case key.Matches(msg, m.keys.Back):
+	case key.Matches(msg, m.keys.Back) || msg.String() == "h":
 		m.state = viewNetworksList
 		m.clearStatus()
 		m.resizeComponents()
 		return nil
-	case key.Matches(msg, m.keys.Connect):
+	case key.Matches(msg, m.keys.Connect) || msg.String() == "l":
 		if i, ok := m.knownWifiList.SelectedItem().(wifiAP); ok {
 			profileID := i.WifiAccessPoint[gonetworkmanager.NmcliFieldConnectionUUID]
 			if profileID == "" {
@@ -1306,6 +1306,20 @@ func (m *model) handleKnownNetworksListKeys(msg tea.KeyMsg) []tea.Cmd {
 
 func (m model) isTextInputActive() bool {
 	return m.state == viewPasswordInput || m.state == viewProfileCreate || m.state == viewProfileEdit || (m.state == viewNetworksList && m.isFiltering)
+}
+
+// remapVimKeys converts j/k to down/up arrow keys when not in a text input context.
+func (m model) remapVimKeys(msg tea.KeyMsg) tea.KeyMsg {
+	if m.isTextInputActive() {
+		return msg
+	}
+	switch msg.String() {
+	case "j":
+		return tea.KeyMsg{Type: tea.KeyDown}
+	case "k":
+		return tea.KeyMsg{Type: tea.KeyUp}
+	}
+	return msg
 }
 
 func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -1659,6 +1673,9 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 
 	case tea.KeyMsg:
+		// Remap vim j/k to arrow keys when not typing in a text field
+		msg = m.remapVimKeys(msg)
+
 		if key.Matches(msg, m.keys.Quit) && !(msg.String() == "q" && m.isTextInputActive()) {
 			if m.updateCancelFn != nil {
 				m.updateCancelFn()
@@ -1718,7 +1735,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			cmds = append(cmds, m.handleKnownNetworksListKeys(msg)...)
 		case viewProfileDetails:
 			switch {
-			case key.Matches(msg, m.keys.Back):
+			case key.Matches(msg, m.keys.Back) || msg.String() == "h":
 				m.state = viewKnownNetworksList
 				m.clearStatus()
 			case key.Matches(msg, m.keys.EditProfile):
@@ -1863,7 +1880,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 			// Handle custom key bindings
 			switch {
-			case key.Matches(msg, m.keys.Back) || msg.String() == "esc":
+			case key.Matches(msg, m.keys.Back) || msg.String() == "esc" || msg.String() == "h":
 				// If a filter is active (but not currently editing), clear it
 				if m.filterQuery != "" {
 					m.filterQuery = ""
@@ -1977,7 +1994,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				} else {
 					m.connectionStatusMsg = toggleHiddenStatusMsgStyle.Render("No active connection.")
 				}
-			case key.Matches(msg, m.keys.Connect):
+			case key.Matches(msg, m.keys.Connect) || msg.String() == "l":
 				if item, ok := m.wifiList.SelectedItem().(wifiAP); ok {
 					m.selectedAP = item
 					ssid := item.getSSIDFromScannedAP()
@@ -2039,7 +2056,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.connectionStatusMsg = ""
 			}
 		case viewActiveConnectionInfo:
-			if key.Matches(msg, m.keys.Back) {
+			if key.Matches(msg, m.keys.Back) || msg.String() == "h" {
 				m.state = viewNetworksList
 				m.connectionStatusMsg = ""
 			} else {
