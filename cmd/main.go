@@ -4,7 +4,9 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -13,6 +15,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"syscall"
 
 	"github.com/charmbracelet/bubbles/help"
 	"github.com/charmbracelet/bubbles/key"
@@ -87,6 +90,7 @@ const (
 	viewProfileDetails
 	viewProfileCreate
 	viewProfileEdit
+	viewUpdating
 )
 
 type itemDelegate struct{}
@@ -232,16 +236,32 @@ type profileSaveResultMsg struct {
 	profileRef string
 }
 
+type updateCheckMsg struct {
+	latestVersion string
+	updateAvail   bool
+	err           error // always swallowed in TUI context
+}
+
+type updateProgressMsg struct {
+	step    UpdateStep
+	message string
+}
+
+type updateCompleteMsg struct {
+	newVersion string
+	err        error
+}
+
 type keyMap struct {
-	Connect, Refresh, Quit, Back, Help, Filter, ToggleWifi, Disconnect, Info, ToggleHidden, Forget, Profiles, NewProfile, EditProfile, ClearSecret key.Binding
-	currentState                                                                                                                                   viewState
+	Connect, Refresh, Quit, Back, Help, Filter, ToggleWifi, Disconnect, Info, ToggleHidden, Forget, Profiles, NewProfile, EditProfile, ClearSecret, Update key.Binding
+	currentState                                                                                                                                          viewState
 }
 
 func (k keyMap) ShortHelp() []key.Binding {
 	b := []key.Binding{k.Help}
 	switch k.currentState {
 	case viewNetworksList:
-		b = append(b, k.Connect, k.Refresh, k.Filter, k.ToggleWifi)
+		b = append(b, k.Connect, k.Refresh, k.Filter, k.ToggleWifi, k.Update)
 	case viewPasswordInput, viewConnectionResult, viewConfirmDisconnect, viewConfirmForget:
 		b = append(b, k.Connect, k.Back)
 	case viewKnownNetworksList:
@@ -261,7 +281,7 @@ func (k keyMap) FullHelp() [][]key.Binding {
 		return [][]key.Binding{
 			{k.Help, k.Connect, k.Back, k.Quit},
 			{k.Refresh, k.Filter, k.ToggleHidden, k.ToggleWifi},
-			{k.Disconnect, k.Forget, k.Info, k.Profiles},
+			{k.Disconnect, k.Forget, k.Info, k.Profiles, k.Update},
 		}
 	case viewKnownNetworksList:
 		return [][]key.Binding{{k.Connect, k.NewProfile, k.EditProfile, k.Forget}, {k.Refresh, k.Back, k.Quit}}
@@ -288,6 +308,7 @@ var defaultKeyBindings = keyMap{
 	NewProfile:   key.NewBinding(key.WithKeys("n"), key.WithHelp("n", "new profile")),
 	EditProfile:  key.NewBinding(key.WithKeys("e"), key.WithHelp("e", "edit profile")),
 	ClearSecret:  key.NewBinding(key.WithKeys("ctrl+x"), key.WithHelp("ctrl+x", "clear password")),
+	Update:       key.NewBinding(key.WithKeys("U"), key.WithHelp("U", "update")),
 }
 
 type model struct {
@@ -318,6 +339,15 @@ type model struct {
 	help                        help.Model
 	profileForm                 profileFormState
 	profileDetailsID            string
+	updateAvailable             bool
+	updateLatestVersion         string
+	updateStatusMsg             string
+	updateError                 error
+	updateNewVersion            string
+	isUpdating                  bool
+	wantsRestart                bool
+	allowPrerelease             bool
+	updateCancelFn              context.CancelFunc
 }
 
 type profileFormMode int
@@ -436,6 +466,7 @@ func initialModel() model {
 		},
 		knownProfiles:      make(map[string]gonetworkmanager.ConnectionProfile),
 		showHiddenNetworks: false,
+		allowPrerelease:    getAllowPrereleaseConfig(),
 	}
 	m.keys.currentState = m.state
 
@@ -449,7 +480,46 @@ func initialModel() model {
 }
 
 func (m model) Init() tea.Cmd {
-	return tea.Batch(getWifiStatusInternalCmd(), fetchKnownNetworksCmd(), fetchWifiNetworksCmd(true), m.spinner.Tick)
+	return tea.Batch(getWifiStatusInternalCmd(), fetchKnownNetworksCmd(), fetchWifiNetworksCmd(true), m.spinner.Tick, checkForUpdateCmd())
+}
+
+func checkForUpdateCmd() tea.Cmd {
+	return func() tea.Msg {
+		defer func() {
+			if r := recover(); r != nil {
+				log.Printf("Cmd: Update check panicked: %v", r)
+			}
+		}()
+		result, err := checkForUpdate()
+		if err != nil || result == nil {
+			if err != nil {
+				log.Printf("Cmd: Update check error: %v", err)
+			}
+			return updateCheckMsg{}
+		}
+		return updateCheckMsg{
+			latestVersion: result.LatestVersion,
+			updateAvail:   result.UpdateAvail,
+		}
+	}
+}
+
+var tuiProgram *tea.Program
+
+func performTUIUpdateCmd(ctx context.Context, keepBackup bool, allowPrerelease bool) tea.Cmd {
+	return func() tea.Msg {
+		newVersion, err := performSelfUpdateCore(UpdateOptions{
+			Ctx:             ctx,
+			KeepBackup:      keepBackup,
+			AllowPrerelease: allowPrerelease,
+			ProgressFn: func(p UpdateProgress) {
+				if tuiProgram != nil {
+					tuiProgram.Send(updateProgressMsg{step: p.Step, message: p.Message})
+				}
+			},
+		})
+		return updateCompleteMsg{newVersion: newVersion, err: err}
+	}
 }
 
 func cacheFilePath() string {
@@ -1315,7 +1385,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 
 	case spinner.TickMsg:
-		if m.isLoading {
+		if m.isLoading || m.isUpdating {
 			m.spinner, cmd = m.spinner.Update(msg)
 			cmds = append(cmds, cmd)
 		}
@@ -1556,8 +1626,44 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			cmds = append(cmds, textinput.Blink)
 		}
 
+	case updateCheckMsg:
+		if msg.updateAvail && msg.latestVersion != "" {
+			m.updateAvailable = true
+			m.updateLatestVersion = msg.latestVersion
+		}
+
+	case updateProgressMsg:
+		m.updateStatusMsg = msg.message
+
+	case updateCompleteMsg:
+		m.isUpdating = false
+		m.isLoading = false
+		m.updateCancelFn = nil
+		if msg.err != nil {
+			if errors.Is(msg.err, context.Canceled) {
+				m.updateError = nil
+				m.updateStatusMsg = "Update cancelled."
+			} else {
+				m.updateError = msg.err
+				m.updateStatusMsg = ""
+			}
+		} else {
+			if msg.newVersion != "" {
+				m.updateNewVersion = msg.newVersion
+				m.updateAvailable = false
+			} else {
+				// Already up to date
+				m.updateStatusMsg = "Already up to date."
+			}
+			m.updateError = nil
+		}
+
 	case tea.KeyMsg:
 		if key.Matches(msg, m.keys.Quit) && !(msg.String() == "q" && m.isTextInputActive()) {
+			if m.updateCancelFn != nil {
+				m.updateCancelFn()
+				m.updateCancelFn = nil
+			}
 			return m, tea.Quit
 		}
 		if key.Matches(msg, m.keys.Help) {
@@ -1585,6 +1691,25 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					}
 					log.Printf("Help toggled, content height for %v set to: %d", m.state, nCAH)
 				}
+			}
+		}
+
+		// Shift+U: trigger in-TUI update
+		if msg.String() == "U" && m.updateAvailable && !m.isTextInputActive() && !m.isUpdating {
+			if m.state != viewConnecting && m.state != viewUpdating {
+				ctx, cancel := context.WithCancel(context.Background())
+				m.updateCancelFn = cancel
+				m.previousState = m.state
+				m.state = viewUpdating
+				m.isUpdating = true
+				m.isLoading = true
+				m.updateStatusMsg = "Starting update..."
+				m.updateError = nil
+				m.updateNewVersion = ""
+				return m, tea.Batch(
+					performTUIUpdateCmd(ctx, getKeepBackupConfig(), m.allowPrerelease),
+					m.spinner.Tick,
+				)
 			}
 		}
 
@@ -1984,6 +2109,26 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.state = m.previousState
 				m.connectionStatusMsg = ""
 			}
+		case viewUpdating:
+			switch {
+			case key.Matches(msg, m.keys.Back):
+				if m.isUpdating {
+					if m.updateCancelFn != nil {
+						m.updateCancelFn()
+						m.updateCancelFn = nil
+					}
+				} else {
+					m.state = m.previousState
+					m.updateError = nil
+					m.updateStatusMsg = ""
+					m.updateCancelFn = nil
+				}
+			case key.Matches(msg, m.keys.Connect):
+				if !m.isUpdating && m.updateNewVersion != "" {
+					m.wantsRestart = true
+					return m, tea.Quit
+				}
+			}
 		}
 	}
 	return m, tea.Batch(cmds...)
@@ -1994,6 +2139,7 @@ func (m model) View() string { /* Same as previous version with "Not enough spac
 	var mainSb strings.Builder
 	hView := m.headerView(avW)
 	m.keys.currentState = m.state
+	m.keys.Update.SetEnabled(m.updateAvailable && !m.isUpdating)
 	helpR := m.help.View(m.keys)
 	fView := m.footerView(avW, helpR)
 	hH := lipgloss.Height(hView)
@@ -2093,6 +2239,32 @@ func (m model) View() string { /* Same as previous version with "Not enough spac
 		currMainS = lipgloss.JoinVertical(lipgloss.Center, fmt.Sprintf("Disconnect from %s ?", m.selectedAP.StyledTitle()), "\n", lipgloss.NewStyle().Foreground(ansFaintTextColor).Render("(Enter to confirm, Esc to cancel)"))
 	case viewConfirmForget:
 		currMainS = lipgloss.JoinVertical(lipgloss.Center, fmt.Sprintf("Forget profile for\n%s ?", m.selectedAP.StyledTitle()), "\n", lipgloss.NewStyle().Foreground(ansFaintTextColor).Render("(Enter to confirm, Esc to cancel)"))
+	case viewUpdating:
+		msgW := avW * 3 / 4
+		if msgW > 80 {
+			msgW = 80
+		}
+		if msgW < 40 {
+			msgW = 40
+		}
+		wrapStyle := lipgloss.NewStyle().Width(msgW).Align(lipgloss.Center)
+		if m.updateError != nil {
+			errMsg := wrapStyle.Render(errorStyle.Render(fmt.Sprintf("Update failed: %v", m.updateError)))
+			hint := lipgloss.NewStyle().Foreground(ansFaintTextColor).Render("(Esc to go back)")
+			currMainS = lipgloss.JoinVertical(lipgloss.Center, "", errMsg, "", hint)
+		} else if m.updateNewVersion != "" {
+			successMsg := successStyle.Render(fmt.Sprintf("Updated to %s!", m.updateNewVersion))
+			hint := lipgloss.NewStyle().Foreground(ansFaintTextColor).Render("(Enter to restart, Esc to continue)")
+			currMainS = lipgloss.JoinVertical(lipgloss.Center, "", successMsg, "", hint)
+		} else if m.isUpdating {
+			progress := connectingStyle.Render(fmt.Sprintf("%s %s", m.spinner.View(), m.updateStatusMsg))
+			hint := lipgloss.NewStyle().Foreground(ansFaintTextColor).Render("(Esc to cancel)")
+			currMainS = lipgloss.JoinVertical(lipgloss.Center, "", progress, "", hint)
+		} else {
+			statusMsg := toggleHiddenStatusMsgStyle.Render(m.updateStatusMsg)
+			hint := lipgloss.NewStyle().Foreground(ansFaintTextColor).Render("(Esc to go back)")
+			currMainS = lipgloss.JoinVertical(lipgloss.Center, "", statusMsg, "", hint)
+		}
 	case viewKnownNetworksList:
 		listR := m.knownWifiList.View()
 		if networkListWidthPercent > 0 || networkListFixedWidth > 0 {
@@ -2155,14 +2327,20 @@ func (m model) headerView(w int) string {
 		s += wifiStatusStyleDisabled.Render("Disabled ✘")
 	}
 
+	// Update hint (dim, non-intrusive)
+	updateHint := ""
+	if m.updateAvailable {
+		updateHint = " " + lipgloss.NewStyle().Foreground(ansFaintTextColor).Render("("+m.updateLatestVersion+" avail, U to update)")
+	}
+
 	// Calculate spacing
-	fixedWidth := lipgloss.Width(t) + lipgloss.Width(s)
+	fixedWidth := lipgloss.Width(t) + lipgloss.Width(s) + lipgloss.Width(updateHint)
 	scanWidth := lipgloss.Width(scanIndicator)
 	totalWidth := fixedWidth + scanWidth
 
 	if totalWidth >= w {
-		// Not enough space, just show title and status
-		sp := w - fixedWidth
+		// Not enough space — drop update hint, just show title and status
+		sp := w - lipgloss.Width(t) - lipgloss.Width(s)
 		if sp < 1 {
 			sp = 1
 		}
@@ -2181,7 +2359,7 @@ func (m model) headerView(w int) string {
 		rightSpace = 1
 	}
 
-	return lipgloss.JoinHorizontal(lipgloss.Left, t, strings.Repeat(" ", leftSpace), scanIndicator, strings.Repeat(" ", rightSpace), s)
+	return lipgloss.JoinHorizontal(lipgloss.Left, t, strings.Repeat(" ", leftSpace), scanIndicator, strings.Repeat(" ", rightSpace), s, updateHint)
 }
 func (m model) footerView(w int, h string) string { /* Same */
 	return lipgloss.PlaceHorizontal(w, lipgloss.Center, helpGlobalStyle.Render(h))
@@ -2204,10 +2382,18 @@ Overview:
 Usage:
   nmtui-go
   nmtui-go [--help] [--version]
+  nmtui-go [--update] [--update-prerelease] [--no-backup]
+  nmtui-go [--check-update]
 
 Options:
-  -h, --help      Show this help and exit
-  -v, --version   Show version/build metadata and exit
+  -h, --help            Show this help and exit
+  -v, --version         Show version/build metadata and exit
+  --update              Self-update to the latest GitHub release
+  --check-update        Check if a newer version is available
+
+  Modifiers for --update:
+  --update-prerelease   Include pre-release versions when updating
+  --no-backup           Don't keep backup of old binary after update
 
 Features:
   - Scan for Wi-Fi networks (rescan on demand)
@@ -2235,6 +2421,7 @@ Runtime keybindings (inside TUI):
   e               Edit selected profile
   Ctrl+f          Forget selected known profile
   Ctrl+x          Clear password in profile form
+  U (Shift+U)     Update to latest version (when update available)
   ?               Toggle extended in-app help
   q / Ctrl+c      Quit (plain q is ignored while typing in text inputs)
 
@@ -2250,6 +2437,12 @@ Troubleshooting:
   - Wi-Fi won't toggle: check hardware switch/rfkill blocks.
   - Authentication failures: verify password and inspect debug logs.
   - Hidden SSIDs: unnamed entries can be shown/hidden with 'u'; direct hidden SSID entry is not supported.
+
+Environment variables:
+  NMTUI_NO_UPDATE_CHECK=1       Disable automatic update check on startup
+  NMTUI_UPDATE_PRERELEASE=1     Include pre-release versions in update checks
+  NMTUI_UPDATE_KEEP_BACKUP=0    Don't keep .old backup after update
+  GITHUB_TOKEN=<token>          Increase GitHub API rate limit (60->5000/hr)
 
 Debug logging:
   Run with:
@@ -2280,6 +2473,20 @@ func handleCLIFlags(args []string) (exitNow bool, exitCode int) {
 	case "-v", "--version":
 		printVersion(os.Stdout)
 		return true, 0
+	case "--update":
+		for _, a := range args[1:] {
+			switch a {
+			case "--update-prerelease":
+				os.Setenv("NMTUI_UPDATE_PRERELEASE", "1")
+			case "--no-backup":
+				os.Setenv("NMTUI_UPDATE_KEEP_BACKUP", "0")
+			}
+		}
+		exitCode := performSelfUpdateCLI()
+		return true, exitCode
+	case "--check-update":
+		exitCode := performCheckUpdateCLI()
+		return true, exitCode
 	default:
 		if strings.HasPrefix(args[0], "-") {
 			fmt.Fprintf(os.Stderr, "Unknown option: %s\n\n", args[0])
@@ -2319,6 +2526,7 @@ func main() { /* Same log setup */
 	}
 	im := initialModel()
 	p := tea.NewProgram(im, tea.WithAltScreen(), tea.WithMouseCellMotion())
+	tuiProgram = p
 	fm, err := p.Run()
 	if err != nil {
 		log.Printf("Err run TUI: %v", err)
@@ -2329,5 +2537,20 @@ func main() { /* Same log setup */
 			fmt.Fprintf(os.Stderr, "Err run TUI: %v\n", err)
 		}
 		os.Exit(1)
+	}
+
+	// Check if app wants to restart after update
+	if fmm, ok := fm.(model); ok && fmm.wantsRestart {
+		binPath, err := os.Executable()
+		if err == nil {
+			binPath, _ = filepath.EvalSymlinks(binPath)
+			execErr := syscall.Exec(binPath, os.Args, os.Environ())
+			if execErr != nil {
+				fmt.Fprintf(os.Stderr, "Updated successfully but restart failed: %v\nPlease restart nmtui-go manually.\n", execErr)
+			}
+		} else {
+			fmt.Fprintf(os.Stderr, "Updated successfully. Please restart nmtui-go manually.\n")
+		}
+		os.Exit(0)
 	}
 }
